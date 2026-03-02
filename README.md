@@ -12,7 +12,7 @@ all the game logic, towers, paths, and bloons were coded from scratch, and all t
 
 ### download
 
-if you just wanna play, you don't need to mess with the code. hit up the **[Releases](https://github.com/FlavouredTux/btdx-go/releases)** tab on the right side of the github page and grab the zip file. extract the folder and just run the game.
+if you just wanna play, you don't need to mess with the code. hit up the **[Releases](https://github.com/FlavouredTux/bloons-tower-defense-x-go/releases)** tab on the right side of the github page and grab the zip file. extract the folder and just run the game.
 
 ### build from source
 
