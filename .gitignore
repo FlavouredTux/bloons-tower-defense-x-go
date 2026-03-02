@@ -1,0 +1,16 @@
+# binary
+btdx
+
+# editor/os junk
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# backup dirs
+internal/behaviors.bak/
+internal/behaviors.bak2/
+internal/engine.bak2/
+btdx.exe
