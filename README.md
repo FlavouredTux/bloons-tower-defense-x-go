@@ -6,9 +6,9 @@ all the game logic, towers, paths, and bloons were coded from scratch, and all t
 
 ## how to play
 
-![title screen](title_screen.png)
+![title screen](docs/assets/title_screen.png)
 
-![gameplay](gameplay.png)
+![gameplay](docs/assets/gameplay.png)
 
 ### download
 
