@@ -41,11 +41,7 @@ clean: ## Clean build artifacts
 	go clean ./...
 
 # Development targets
-vet: ## Run go vet
-	go vet ./...
 
-test: ## Run tests
-	go test ./...
 
 fmt: ## Format code
 	gofmt -w .
