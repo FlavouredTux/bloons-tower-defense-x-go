@@ -122,6 +122,7 @@ type TimelineRunner struct {
 	Running     bool
 	Speed       float64 // steps per game tick
 	Looping     bool
+	accumulator float64 // fractional step accumulator for sub-tick speed
 
 	// callback for executing timeline actions
 	OnAction func(action TimelineAction)
@@ -135,31 +136,45 @@ func NewTimelineRunner(tl *TimelineAsset) *TimelineRunner {
 	}
 }
 
-// tick advances the timeline by one game step
+// tick advances the timeline by Speed steps per game tick.
+// uses an accumulator so fractional speeds (e.g. 1.5) work correctly.
 func (tr *TimelineRunner) Tick() {
 	if !tr.Running || tr.Timeline == nil {
 		return
 	}
 
-	// check if any steps should fire at the current step
-	for _, step := range tr.Timeline.Steps {
-		if step.Step == tr.CurrentStep {
-			for _, act := range step.Actions {
-				if tr.OnAction != nil {
-					tr.OnAction(act)
+	spd := tr.Speed
+	if spd < 1 {
+		spd = 1
+	}
+	tr.accumulator += spd
+
+	for tr.accumulator >= 1.0 {
+		tr.accumulator -= 1.0
+		if !tr.Running {
+			break
+		}
+
+		// fire actions at the current step
+		for _, step := range tr.Timeline.Steps {
+			if step.Step == tr.CurrentStep {
+				for _, act := range step.Actions {
+					if tr.OnAction != nil {
+						tr.OnAction(act)
+					}
 				}
 			}
 		}
-	}
 
-	tr.CurrentStep++
+		tr.CurrentStep++
 
-	// check if we've reached the end
-	if tr.CurrentStep > tr.Timeline.MaxStep {
-		if tr.Looping {
-			tr.CurrentStep = 0
-		} else {
-			tr.Running = false
+		// check if we've reached the end
+		if tr.CurrentStep > tr.Timeline.MaxStep {
+			if tr.Looping {
+				tr.CurrentStep = 0
+			} else {
+				tr.Running = false
+			}
 		}
 	}
 }
@@ -172,7 +187,7 @@ func (tr *TimelineRunner) Reset() {
 
 // jSON types for deserialization
 type TimelineJSON struct {
-	Name    string             `json:"Name"`
+	Name    string              `json:"Name"`
 	Entries []TimelineEntryJSON `json:"Entries"`
 }
 
@@ -182,11 +197,11 @@ type TimelineEntryJSON struct {
 }
 
 type TimelineActionJSON struct {
-	Kind         int              `json:"Kind"`
-	ExeType      int              `json:"ExeType"`
-	FunctionName string           `json:"FunctionName"`
-	WhoName      string           `json:"WhoName"`
-	Code         string           `json:"Code"`
+	Kind         int               `json:"Kind"`
+	ExeType      int               `json:"ExeType"`
+	FunctionName string            `json:"FunctionName"`
+	WhoName      string            `json:"WhoName"`
+	Code         string            `json:"Code"`
 	Arguments    []TimelineArgJSON `json:"Arguments"`
 }
 

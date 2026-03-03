@@ -2,12 +2,16 @@ package behaviors
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"strings"
 
 	"btdx/internal/engine"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	etext "github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
+	"golang.org/x/image/font/basicfont"
 )
 
 // normal_Bloon_Branch — the core bloon object
@@ -274,6 +278,64 @@ func (b *NormalBloonBranch) Draw(inst *engine.Instance, screen *ebiten.Image, g 
 	engine.DrawSpriteExt(screen, spr.Frames[frameIdx], spr.XOrigin, spr.YOrigin,
 		inst.X, inst.Y, scale*inst.ImageXScale, scale*inst.ImageYScale,
 		inst.ImageAngle, inst.ImageAlpha)
+
+	// show bloon info tooltip when the setting is on and mouse hovers the bloon
+	if getGlobal(g, "blooninfo") == 1 && g.IsMouseOverInstance(inst) {
+		name := bloonLayerName(layer)
+		info := fmt.Sprintf("%s (%.1f)", name, layer)
+		drawBloonInfoTag(screen, g, info, inst.X, inst.Y-20)
+	}
+}
+
+// bloonLayerName returns a readable name for the bloon layer
+func bloonLayerName(layer float64) string {
+	switch {
+	case layer <= 1:
+		return "Red"
+	case layer <= 1.5:
+		return "Orange"
+	case layer <= 2:
+		return "Blue"
+	case layer <= 2.5:
+		return "Cyan"
+	case layer <= 3:
+		return "Green"
+	case layer <= 3.5:
+		return "Lime"
+	case layer <= 4:
+		return "Yellow"
+	case layer <= 4.5:
+		return "Amber"
+	case layer <= 5:
+		return "Pink"
+	case layer <= 5.5:
+		return "Purple"
+	case layer <= 6:
+		return "Black"
+	case layer <= 6.1:
+		return "White"
+	case layer <= 7:
+		return "Zebra"
+	case layer <= 8:
+		return "Rainbow"
+	case layer <= 8.5:
+		return "Prismatic"
+	default:
+		return fmt.Sprintf("Layer %.1f", layer)
+	}
+}
+
+// drawBloonInfoTag draws a small tooltip above a bloon
+func drawBloonInfoTag(screen *ebiten.Image, g *engine.Game, text string, x, y float64) {
+	tw := float64(len(text)*7 + 6)
+	th := 16.0
+	bx := x - tw/2
+	by := y - th
+
+	vector.DrawFilledRect(screen, float32(bx), float32(by), float32(tw), float32(th),
+		color.RGBA{0, 0, 0, 180}, false)
+	etext.Draw(screen, text, basicfont.Face7x13, int(bx)+3, int(by)+12,
+		color.RGBA{255, 255, 255, 255})
 }
 
 // assignBloonPath assigns a path to the bloon based on global.track
@@ -423,13 +485,13 @@ func getVar(inst *engine.Instance, key string) float64 {
 
 // popBloon handles bloon popping with proper splitting logic
 //
-//
 // layer categories:
-//   Integer layers (1-5): just reduce layer, no children
-//   Half layers (.5): self + 2 children = 3 bloons
-//   Layer 6.1 (White): self + 1 child = 2 bloons
-//   Layers 6/7/8 (Black/Zebra/Rainbow): self + 1 child = 2 bloons
-//     bonus children at higher LP values
+//
+//	Integer layers (1-5): just reduce layer, no children
+//	Half layers (.5): self + 2 children = 3 bloons
+//	Layer 6.1 (White): self + 1 child = 2 bloons
+//	Layers 6/7/8 (Black/Zebra/Rainbow): self + 1 child = 2 bloons
+//	  bonus children at higher LP values
 func popBloon(bloon *engine.Instance, lp float64, g *engine.Game) {
 	layer := getVar(bloon, "bloonlayer")
 	cashReward := getGlobal(g, "cashwavereward")

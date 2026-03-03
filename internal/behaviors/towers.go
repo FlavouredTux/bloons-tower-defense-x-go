@@ -425,46 +425,8 @@ func (b *DartBehavior) Step(inst *engine.Instance, g *engine.Game) {
 		return
 	}
 
-	// check collisions with bloons
-	bloons := g.InstanceMgr.FindByObject("Normal_Bloon_Branch")
-	for _, bloon := range bloons {
-		if bloon.Destroyed {
-			continue
-		}
-
-		// simple distance collision
-		dx := inst.X - bloon.X
-		dy := inst.Y - bloon.Y
-		dist := math.Sqrt(dx*dx + dy*dy)
-		if dist < 20 { // collision radius
-			lp := getVar(inst, "LP")
-			pp := getVar(inst, "PP")
-			leadpop := getVar(inst, "leadpop")
-			camopop := getVar(inst, "camopop")
-
-			if pp <= 0 {
-				break
-			}
-
-			// can't pop lead without lead-popping
-			if getVar(bloon, "lead") == 1 && leadpop == 0 {
-				continue
-			}
-			// can't hit camo without camo detection
-			if getVar(bloon, "camo") == 1 && camopop == 0 {
-				continue
-			}
-
-			popBloon(bloon, lp, g)
-
-			// reduce pierce
-			inst.Vars["PP"] = pp - 1
-			if pp-1 <= 0 {
-				g.InstanceMgr.Destroy(inst.ID)
-				return
-			}
-		}
-	}
+	// use the shared swept collision check so fast darts don't tunnel through
+	projectileHitBloons(inst, g, 20)
 }
 
 func (b *DartBehavior) Alarm(inst *engine.Instance, idx int, g *engine.Game) {

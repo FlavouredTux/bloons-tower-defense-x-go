@@ -1,5 +1,10 @@
 # binary
 btdx
+btdx-linux
+btdx-linux.zip
+btdx-windows.exe
+btdx-windows.zip
+*.zip
 
 # editor/os junk
 .vscode/
@@ -16,3 +21,13 @@ internal/engine.bak2/
 btdx.exe
 cmd/extract/
 tools/
+
+# dev/patching scripts
+parse_test_run.go
+patch_file.diff
+patch_step.diff
+patch_spawn.py
+test_run.sh
+update_tower.py
+startscreen.old.go
+startscreen.older.go

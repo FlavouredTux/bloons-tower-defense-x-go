@@ -3,7 +3,10 @@ package behaviors
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
+
+	"github.com/hajimehoshi/ebiten/v2"
 
 	"btdx/internal/engine"
 )
@@ -20,8 +23,49 @@ type MainMenuControl struct {
 
 func (b *MainMenuControl) Create(inst *engine.Instance, g *engine.Game) {
 	inst.Vars["start"] = 0
+	inst.Vars["ticks"] = 0
 	inst.Alarms[5] = 5
 	inst.Alarms[0] = 1
+
+	// Hide the static ANY_KEY tile so we can draw an animated pulse version!
+	rm := g.RoomManager.GetCurrent()
+	if rm != nil {
+		for i := 0; i < len(rm.Tiles); i++ {
+			if rm.Tiles[i].BGName == "ANY_KEY" {
+				// Remove it from the renderer
+				rm.Tiles = append(rm.Tiles[:i], rm.Tiles[i+1:]...)
+				break // Only one ANY_KEY exists
+			}
+		}
+	}
+}
+
+// Draw animates the pulsing ANY_KEY text (missing original animation request)
+func (b *MainMenuControl) Draw(inst *engine.Instance, screen *ebiten.Image, g *engine.Game) {
+	rm := g.RoomManager.GetCurrent()
+	var viewX, viewY float64
+	if rm != nil && len(rm.Views) > 0 {
+		viewX = float64(rm.Views[0].XView)
+		viewY = float64(rm.Views[0].YView)
+	}
+
+	targetRoomX := 256.0
+	targetRoomY := 1248.0
+	screenX := targetRoomX - viewX
+	screenY := targetRoomY - viewY
+
+	bg := g.AssetManager.GetBackground("ANY_KEY")
+	if bg != nil {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(screenX, screenY)
+
+		t, _ := inst.Vars["ticks"].(int)
+		// Pulse the alpha smoothly back and forth!
+		alpha := 0.65 + 0.35*math.Sin(float64(t)*0.08)
+		op.ColorScale.ScaleAlpha(float32(alpha))
+
+		screen.DrawImage(bg, op)
+	}
 }
 
 func (b *MainMenuControl) Alarm(inst *engine.Instance, idx int, g *engine.Game) {
@@ -42,29 +86,46 @@ func (b *MainMenuControl) Alarm(inst *engine.Instance, idx int, g *engine.Game) 
 }
 
 func (b *MainMenuControl) Step(inst *engine.Instance, g *engine.Game) {
+	t, _ := inst.Vars["ticks"].(int)
+	inst.Vars["ticks"] = t + 1
+
 	if inst.Speed > 0 {
 		inst.Speed += 0.04
 		// recompute hspeed/vspeed from speed/direction
 		inst.MotionSet(inst.Direction, inst.Speed)
+
+		// To fix the "deadzone" jump where the view normally doesn't scroll
+		// for 138 frames before sharply jumping down, we override the camera continuously!
+		rm := g.RoomManager.GetCurrent()
+		if rm != nil && len(rm.Views) > 0 {
+			// Lock exactly 16 pixels above the target's visual coordinate
+			// (Preserves exact starting parity where YView=976, Y=992)
+			rm.Views[0].YView = int(inst.Y) - 16
+		}
 	}
 }
 
-func (b *MainMenuControl) startTransition(inst *engine.Instance) {
+func (b *MainMenuControl) startTransition(inst *engine.Instance, g *engine.Game) {
 	start, _ := inst.Vars["start"].(int)
 	if start == 0 {
 		inst.Vars["start"] = 1
 		// move downward (direction 270 = down)
 		inst.MotionSet(270, 0.1)
 		inst.Alarms[1] = 180
+
+		rm := g.RoomManager.GetCurrent()
+		if rm != nil && len(rm.Views) > 0 {
+			rm.Views[0].ObjName = "" // stop standard view bounding box logic that created the deadzone
+		}
 	}
 }
 
 func (b *MainMenuControl) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
-	b.startTransition(inst)
+	b.startTransition(inst, g)
 }
 
 func (b *MainMenuControl) KeyPress(inst *engine.Instance, g *engine.Game) {
-	b.startTransition(inst)
+	b.startTransition(inst, g)
 }
 
 // menu_Bloon — decorative bloons floating up on the start screen.

@@ -236,8 +236,10 @@ func applyLinearUpgrade(inst *engine.Instance, g *engine.Game, rule linearUpgrad
 		return true
 	}
 
+	// clear upgrade/selection state so the range circle goes away
 	g.GlobalVars["upgradeselect"] = 0.0
 	g.GlobalVars["up"] = 0.0
+	g.GlobalVars["tower"] = 0.0
 	g.GlobalVars["money"] = getGlobal(g, "money") - rule.Cost
 	for _, sign := range g.InstanceMgr.FindByObject("Upgrade_Sign") {
 		g.InstanceMgr.Destroy(sign.ID)
@@ -371,8 +373,10 @@ func (b *CancelUpgradeBarBehavior) Create(inst *engine.Instance, g *engine.Game)
 }
 
 func (b *CancelUpgradeBarBehavior) Step(inst *engine.Instance, g *engine.Game) {
-	show := getGlobal(g, "tower") > 0 && getGlobal(g, "towerplace") == 0 && getGlobal(g, "upgradeselect") == 1
-	if show {
+	// show while a tower is selected (upgrade UI) OR while placing a new tower.
+	showUpgrade := getGlobal(g, "tower") > 0 && getGlobal(g, "towerplace") == 0 && getGlobal(g, "upgradeselect") == 1
+	showPlace := getGlobal(g, "towerplace") == 1
+	if showUpgrade || showPlace {
 		inst.SpriteName = "Cancel_Upgrade_Bar_Spr"
 		return
 	}
@@ -380,6 +384,11 @@ func (b *CancelUpgradeBarBehavior) Step(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *CancelUpgradeBarBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
+	if getGlobal(g, "towerplace") == 1 {
+		// cancel placement mode
+		cancelTowerUI(g)
+		return
+	}
 	if getGlobal(g, "tower") <= 0 || getGlobal(g, "upgradeselect") != 1 {
 		return
 	}
@@ -521,13 +530,17 @@ func (b *UpgradePanel0Behavior) MouseLeftPressed(inst *engine.Instance, g *engin
 	if tower <= 0 {
 		return
 	}
-	// set upgrade flag
-	g.GlobalVars["up"] = 1.0
 	val := towerCodeFraction(tower)
 	if val >= 200 {
 		// acting as PanelMiddle — path 2
+		// don't allow clicks on locked panels
+		if isPathLocked(g, towerID(tower), 2, val) {
+			return
+		}
+		g.GlobalVars["up"] = 1.0
 		g.GlobalVars["pathup"] = 2.0
 	} else {
+		g.GlobalVars["up"] = 1.0
 		// execute in-place linear upgrades immediately to avoid frame-order issues
 		// where click is registered but tower Step consumes no upgrade.
 		if sel := selectedTower(g); sel != nil {
@@ -627,6 +640,11 @@ func (b *UpgradePanelLeftBehavior) MouseLeftPressed(inst *engine.Instance, g *en
 	if inst.ImageAlpha <= 0 {
 		return // hidden panel, can't click
 	}
+	// don't allow clicks on locked panels
+	val := towerCodeFraction(tower)
+	if isPathLocked(g, towerID(tower), 1, val) {
+		return
+	}
 	g.GlobalVars["up"] = 1.0
 	g.GlobalVars["pathup"] = 1.0
 	g.AudioMgr.Play("Upgrade")
@@ -720,6 +738,11 @@ func (b *UpgradePanelRightBehavior) MouseLeftPressed(inst *engine.Instance, g *e
 		return
 	}
 	if inst.ImageAlpha <= 0 {
+		return
+	}
+	// don't allow clicks on locked panels
+	val := towerCodeFraction(tower)
+	if isPathLocked(g, towerID(tower), 3, val) {
 		return
 	}
 	g.GlobalVars["up"] = 1.0

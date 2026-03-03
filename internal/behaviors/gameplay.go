@@ -102,6 +102,10 @@ func (b *GoBehavior) Step(inst *engine.Instance, g *engine.Game) {
 			pts += math.Sqrt(money) * pm
 		}
 
+		// award xp every wave so the bar actually progresses
+		xpGain := (10.0 + wave*2.0) * pm
+		g.GlobalVars["XP"] = getGlobal(g, "XP") + xpGain
+
 		// wave 91 bonus
 		if wave == 91 {
 			pts += 5000 * pm
@@ -195,6 +199,18 @@ func (b *GoBehavior) startNextWave(inst *engine.Instance, g *engine.Game) {
 		runner := engine.NewTimelineRunner(tl)
 		runner.Speed = 1.0 + wsqueeze
 		runner.OnAction = func(action engine.TimelineAction) {
+			if action.WhoName == "self" {
+				// self-targeted actions are variable assignments (end-of-wave hooks
+				// or mid-wave adjustments). Handle the ones that matter; skip the
+				// rest (global.wave and global.wavenow are owned by GoBehavior).
+				if val := extractCodeVar(action.Code, "cashwavereward"); val > 0 {
+					g.GlobalVars["cashwavereward"] = val
+				}
+				if val := extractCodeVar(action.Code, "cashflow"); val > 0 {
+					g.GlobalVars["cashflow"] = val
+				}
+				return
+			}
 			executeBloonSpawn(g, action)
 		}
 		g.ActiveTimeline = runner
@@ -432,16 +448,66 @@ func (b *ControlBehavior) Step(inst *engine.Instance, g *engine.Game) {
 		g.GlobalVars["money"] = 2000000000.0
 	}
 
-	// right-click cancels tower placement mode
+	// right-click cancels tower placement or deselects tower
 	if g.InputMgr.MouseRightPressed() {
 		if getGlobal(g, "towerplace") == 1 {
-			g.GlobalVars["towerplace"] = 0.0
-			g.GlobalVars["towerselect"] = 0.0
-			for _, block := range g.InstanceMgr.FindByObject("Block") {
-				block.Visible = false
-				block.SpriteName = ""
+			cancelTowerUI(g)
+		} else if getGlobal(g, "upgradeselect") == 1 {
+			deselectAllTowers(g)
+		}
+	}
+
+	// make sure the cancel bar exists so players can cancel placement
+	if g.InstanceMgr.InstanceCount("X_sign_bar") == 0 {
+		g.InstanceMgr.Create("X_sign_bar", 400, 454)
+	}
+}
+
+// clicking empty space deselects the currently selected tower
+func (b *ControlBehavior) MouseGlobalLeftPressed(inst *engine.Instance, g *engine.Game) {
+	// only act when a tower is selected and we're not placing
+	if getGlobal(g, "upgradeselect") != 1 || getGlobal(g, "towerplace") == 1 {
+		return
+	}
+	// if a dialog is open, don't deselect
+	if g.InstanceMgr.InstanceCount("Wanna_go_to_main_") > 0 {
+		return
+	}
+
+	// check if the click landed on any tower, panel, or ui element
+	// if not, deselect everything
+	clickedSomething := false
+	for _, other := range g.InstanceMgr.GetAll() {
+		if other.Destroyed || !other.Visible {
+			continue
+		}
+		// skip non-interactive objects
+		if other.ObjectName == inst.ObjectName {
+			continue
+		}
+		// check if click is over a tower or a ui panel
+		isTower := false
+		for _, name := range allSelectableTowers {
+			if other.ObjectName == name {
+				isTower = true
+				break
 			}
 		}
+		isPanel := isTowerPanelObject(other.ObjectName)
+		isUpgrade := other.ObjectName == "Upgrade_Panel0" || other.ObjectName == "Upgrade_PanelLeft" ||
+			other.ObjectName == "Upgrade_PanelRight" || other.ObjectName == "Upgrade_PanelMiddle" ||
+			other.ObjectName == "X_sign_bar" || other.ObjectName == "Sell" ||
+			other.ObjectName == "sell_tower_butt" || other.ObjectName == "Scroll_Up" ||
+			other.ObjectName == "Scroll_Down"
+
+		if (isTower || isPanel || isUpgrade) && g.IsMouseOverInstance(other) {
+			clickedSomething = true
+			break
+		}
+	}
+
+	if !clickedSomething {
+		deselectAllTowers(g)
 	}
 }
 
@@ -481,11 +547,11 @@ func (b *DrawHUD) Draw(inst *engine.Instance, screen *ebiten.Image, g *engine.Ga
 	drawHUDTextColored(screen, g, b.font, fmt.Sprintf("%d", life), 911, 30, hudColorRed)
 
 	// rank (next to Pop_Icon) — black text
-	rank := int(getGlobal(g, "monkeypop"))
+	rank := int(getGlobal(g, "rank"))
 	drawHUDTextColored(screen, g, b.font, fmt.Sprintf("%d", rank), 954, 59, hudColorBlack)
 
-	// points — black text
-	pts := int(math.Floor(getGlobal(g, "points")))
+	// monkeypop (pop count) — black text (replaces points to match expected pop updates)
+	pts := int(getGlobal(g, "monkeypop"))
 	drawHUDTextColored(screen, g, b.font, fmt.Sprintf("%d", pts), 942, 451, hudColorBlack)
 
 	// xP health bar
@@ -596,7 +662,43 @@ func (b *WannaGoToMainBehavior) Create(inst *engine.Instance, g *engine.Game) {
 	inst.ImageSpeed = 0
 }
 
-func (b *WannaGoToMainBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
+func (b *WannaGoToMainBehavior) MouseGlobalLeftPressed(inst *engine.Instance, g *engine.Game) {
+	// The sprite is 360px wide, origin at (180,120), instance at (480,256).
+	// Full sprite covers x:[inst.X-180, inst.X+180], y:[inst.Y-120, inst.Y+120].
+	// Left half = "Yes" → go to main menu. Right half = "No" → cancel.
+	spr := g.AssetManager.GetSprite(inst.SpriteName)
+
+	// figure out dialog bounds. use the sprite if available, otherwise fallback
+	halfW := 180.0
+	halfH := 120.0
+	if spr != nil && spr.Width > 0 {
+		halfW = float64(spr.XOrigin) * inst.ImageXScale
+		halfH = float64(spr.YOrigin) * inst.ImageYScale
+		if halfW <= 0 {
+			halfW = float64(spr.Width) * inst.ImageXScale / 2.0
+		}
+		if halfH <= 0 {
+			halfH = float64(spr.Height) * inst.ImageYScale / 2.0
+		}
+	}
+
+	roomX, roomY := g.GetMouseRoomPos()
+	sprLeft := inst.X - halfW
+	sprRight := inst.X + halfW
+	sprTop := inst.Y - halfH
+	sprBottom := inst.Y + halfH
+
+	if roomX < sprLeft || roomX > sprRight || roomY < sprTop || roomY > sprBottom {
+		// clicked outside the dialog, dismiss it
+		g.InstanceMgr.Destroy(inst.ID)
+		return
+	}
+	if roomX >= inst.X {
+		// right half → No / cancel
+		g.InstanceMgr.Destroy(inst.ID)
+		return
+	}
+	// left half → Yes / go to main menu
 	g.ActiveTimeline = nil
 	g.SetGameSpeed(60)
 	g.AudioMgr.PlayMusic("Main_Menu0")
@@ -678,39 +780,41 @@ func (b *EndBehavior) Step(inst *engine.Instance, g *engine.Game) {
 	}
 }
 
-// bloonLayerDamage maps bloon layer to leak damage
+// bloonLayerDamage maps bloon layer to leak damage.
+// values represent the total lives a bloon and all its children are worth.
+// half-layer bloons split into 3 children so their value is 3x the child layer.
 func bloonLayerDamage(layer float64) float64 {
 	switch {
 	case layer <= 1:
 		return 1
 	case layer <= 1.5:
-		return 4
+		return 3 // 3 reds
 	case layer <= 2:
 		return 2
 	case layer <= 2.5:
-		return 7
+		return 6 // 3 blues
 	case layer <= 3:
 		return 3
 	case layer <= 3.5:
-		return 10
+		return 9 // 3 greens
 	case layer <= 4:
 		return 4
 	case layer <= 4.5:
-		return 13
+		return 12 // 3 yellows
 	case layer <= 5:
 		return 5
 	case layer <= 5.5:
-		return 16
+		return 15 // 3 pinks
 	case layer <= 6:
-		return 11
+		return 10 // 2 pinks (black splits into parent+child)
 	case layer <= 6.1:
-		return 11
+		return 10 // 2 pinks (white splits into parent+child)
 	case layer <= 7:
-		return 23
+		return 23 // zebra = black + white children = complex cascade
 	case layer <= 8:
-		return 47
+		return 47 // rainbow cascade
 	case layer <= 8.5:
-		return 142
+		return 120 // 3 rainbows
 	default:
 		return math.Floor(layer * 6)
 	}
@@ -726,7 +830,9 @@ func (b *WavePanelBehavior) Create(inst *engine.Instance, g *engine.Game) {
 	wp := getGlobal(g, "Wavepanel") + 1
 	g.GlobalVars["Wavepanel"] = wp
 	b.waveup = wp
-	inst.Vars["preview_sprite"] = wavePreviewSprite(g, int(wp))
+	icon := wavePanelIconFor(g, int(wp))
+	inst.Vars["preview_sprite"] = icon.Sprite
+	inst.Vars["preview_frame"] = float64(icon.Frame)
 }
 
 func (b *WavePanelBehavior) Step(inst *engine.Instance, g *engine.Game) {
@@ -748,12 +854,19 @@ func (b *WavePanelBehavior) Step(inst *engine.Instance, g *engine.Game) {
 	if offset >= 0 && offset < 8 {
 		inst.Y = 64 + float64(offset*64)
 		inst.Depth = -19
+		// mark whether this is the current wave for draw highlight
+		if offset == 0 {
+			inst.Vars["is_current"] = 1.0
+		} else {
+			inst.Vars["is_current"] = 0.0
+		}
 		return
 	}
 
 	// move non-visible cards off-screen and behind gameplay.
 	inst.Y = 1200
 	inst.Depth = 200
+	inst.Vars["is_current"] = 0.0
 }
 
 func (b *WavePanelBehavior) Draw(inst *engine.Instance, screen *ebiten.Image, g *engine.Game) {
@@ -775,7 +888,29 @@ func (b *WavePanelBehavior) Draw(inst *engine.Instance, screen *ebiten.Image, g 
 			inst.X, inst.Y, inst.ImageXScale, inst.ImageYScale, inst.ImageAngle, inst.ImageAlpha)
 	}
 
-	drawHUDTextSmall(screen, g, fmt.Sprintf("%d", int(b.waveup)), inst.X+7, inst.Y+3, hudColorBlack)
+	// highlight the current wave panel with a colored overlay
+	isCurrent := getVar(inst, "is_current") == 1.0
+	if isCurrent {
+		vector.DrawFilledRect(screen,
+			float32(inst.X), float32(inst.Y),
+			64, 64,
+			color.RGBA{255, 220, 80, 60}, false)
+	}
+
+	// wave number label
+	waveLabel := fmt.Sprintf("%d", int(b.waveup))
+	const glyphW = 7
+	const tabW = 18
+	textW := len(waveLabel) * glyphW
+	numX := int(inst.X) + (tabW-textW)/2
+
+	// current wave gets a brighter label color
+	labelColor := color.RGBA{0, 0, 0, 255}
+	if isCurrent {
+		labelColor = color.RGBA{200, 40, 0, 255}
+	}
+	etext.Draw(screen, waveLabel, basicfont.Face7x13,
+		numX, int(inst.Y)+14, labelColor)
 
 	preview, _ := inst.Vars["preview_sprite"].(string)
 	if preview == "" {
@@ -785,84 +920,194 @@ func (b *WavePanelBehavior) Draw(inst *engine.Instance, screen *ebiten.Image, g 
 	if spr == nil || len(spr.Frames) == 0 {
 		return
 	}
-	engine.DrawSpriteExt(screen, spr.Frames[0], spr.XOrigin, spr.YOrigin,
+	frameIdx := int(getVar(inst, "preview_frame"))
+	if frameIdx < 0 || frameIdx >= len(spr.Frames) {
+		frameIdx = 0
+	}
+	engine.DrawSpriteExt(screen, spr.Frames[frameIdx], spr.XOrigin, spr.YOrigin,
 		inst.X+31, inst.Y+32, 1, 1, 0, 1)
 }
 
-func wavePreviewSprite(g *engine.Game, wave int) string {
-	tl := g.TimelineMgr.Get(fmt.Sprintf("N%d", wave))
-	if tl == nil {
-		return "Red_Bloon_Spr"
-	}
-
-	maxLayer := 1.0
-	found := false
-	for _, step := range tl.Steps {
-		for _, act := range step.Actions {
-			layer, maxLayerInAct := parseBloonSpawnCode(act.Code)
-			if layer <= 0 {
-				layer = 1
-			}
-			if maxLayerInAct > layer {
-				layer = maxLayerInAct
-			}
-			if !found || layer > maxLayer {
-				maxLayer = layer
-				found = true
-			}
-		}
-	}
-	if !found {
-		return "Red_Bloon_Spr"
-	}
-	return previewSpriteForLayer(maxLayer)
+// wavePanelIcon holds the sprite name and frame index for a wave panel preview icon.
+type wavePanelIcon struct {
+	Sprite string
+	Frame  int
 }
 
-func previewSpriteForLayer(layer float64) string {
-	switch {
-	case layer >= 5000:
-		return "New_DDT_Spr"
-	case layer >= 1200:
-		return "New_ZOMG_Spr"
-	case layer >= 600:
-		return "New_BFB_Spr"
-	case layer >= 90:
-		return "Moab_Spr"
-	case layer >= 18:
-		return "Ceramic_Bloon_Spr"
-	case layer <= 1:
-		return "Red_Bloon_Spr"
-	case layer <= 1.5:
-		return "Orange_Bloon_Spr"
-	case layer <= 2:
-		return "Blue_Bloon_Spr"
-	case layer <= 2.5:
-		return "Cyan_Bloon_Spr"
-	case layer <= 3:
-		return "Green_Bloon_Spr"
-	case layer <= 3.5:
-		return "Lime_Bloon_Spr"
-	case layer <= 4:
-		return "Yellow_Bloon_Spr"
-	case layer <= 4.5:
-		return "Amber_Bloon_Spr"
-	case layer <= 5:
-		return "Pink_Bloon_Spr"
-	case layer <= 5.5:
-		return "Purple_Bloon_Spr"
-	case layer <= 6:
-		return "Black_Bloon_Spr"
-	case layer <= 6.1:
-		return "White_Bloon_Spr"
-	case layer <= 7:
-		return "Zebra_Bloon_Spr"
-	case layer <= 8:
-		return "Rainbow_Bloon_Spr"
-	case layer <= 8.5:
-		return "Prismatic_Bloon_Spr"
-	default:
-		return "Ceramic_Bloon_Spr"
+// wavePanelIconNormal is the hardcoded table from the original GMX Wave_Panel draw event
+// (normalmodeselect = 1 branch). Indices 1-90.
+var wavePanelIconNormal = [91]wavePanelIcon{
+	0:  {"Red_Bloon_Spr", 0}, // unused (wave 0)
+	1:  {"Red_Bloon_Spr", 0},
+	2:  {"Red_Bloon_Spr", 0},
+	3:  {"Blue_Bloon_Spr", 0},
+	4:  {"Blue_Bloon_Spr", 0},
+	5:  {"Green_Bloon_Spr", 0},
+	6:  {"Orange_Bloon_Spr", 0},
+	7:  {"Green_Bloon_Spr", 0},
+	8:  {"Red_Bloon_Spr", 1},
+	9:  {"Yellow_Bloon_Spr", 0},
+	10: {"Cyan_Bloon_Spr", 0},
+	11: {"Green_Bloon_Spr", 1},
+	12: {"Blue_Bloon_Spr", 2},
+	13: {"Lime_Bloon_Spr", 0},
+	14: {"Pink_Bloon_Spr", 0},
+	15: {"Green_Bloon_Spr", 2},
+	16: {"Green_Bloon_Spr", 3},
+	17: {"Black_Bloon_Spr", 0},
+	18: {"Yellow_Bloon_Spr", 1},
+	19: {"White_Bloon_Spr", 0},
+	20: {"Green_Bloon_Spr", 4},
+	21: {"Red_Bloon_Spr", 0},
+	22: {"Zebra_Bloon_Spr", 0},
+	23: {"Green_Bloon_Spr", 5},
+	24: {"Pink_Bloon_Spr", 3},
+	25: {"Yellow_Bloon_Spr", 1},
+	26: {"Pink_Bloon_Spr", 2},
+	27: {"Rainbow_Bloon_Spr", 0},
+	28: {"Black_Bloon_Spr", 4},
+	29: {"White_Bloon_Spr", 5},
+	30: {"Red_Bloon_Spr", 6},
+	31: {"Purple_Bloon_Spr", 0},
+	32: {"Ceramic_Bloon_Spr", 0},
+	33: {"Pink_Bloon_Spr", 1},
+	34: {"Prismatic_Bloon_Spr", 0},
+	35: {"Pink_Bloon_Spr", 6},
+	36: {"Zebra_Bloon_Spr", 3},
+	37: {"Brick_Bloon_Spr", 0},
+	38: {"Rainbow_Bloon_Spr", 2},
+	39: {"Rainbow_Bloon_Spr", 3},
+	40: {"Panel_Mini", 0},
+	41: {"Brick_Bloon_Spr", 0},
+	42: {"Purple_Bloon_Spr", 2},
+	43: {"Panel_Mini", 0},
+	44: {"Rainbow_Bloon_Spr", 1},
+	45: {"Rainbow_Bloon_Spr", 6},
+	46: {"Ceramic_Bloon_Spr", 5},
+	47: {"Amber_Bloon_Spr", 3},
+	48: {"Prismatic_Bloon_Spr", 3},
+	49: {"Ceramic_Bloon_Spr", 2},
+	50: {"Panel_Moab", 0},
+	51: {"Ceramic_Bloon_Spr", 1},
+	52: {"Brick_Bloon_Spr", 0},
+	53: {"Panel_Mini", 0},
+	54: {"Panel_Moab", 0},
+	55: {"Ceramic_Bloon_Spr", 5},
+	56: {"Brick_Bloon_Spr", 0},
+	57: {"Panel_HTA", 0},
+	58: {"Zebra_Bloon_Spr", 3},
+	59: {"Panel_BRC", 0},
+	60: {"Pink_Bloon_Spr", 6},
+	61: {"Brick_Bloon_Spr", 3},
+	62: {"Panel_Shield_Moab", 0},
+	63: {"Ceramic_Bloon_Spr", 4},
+	64: {"Panel_BFB", 0},
+	65: {"Ceramic_Bloon_Spr", 6},
+	66: {"Panel_Moab", 0},
+	67: {"Panel_HTA", 0},
+	68: {"Panel_BRC", 0},
+	69: {"Panel_Mini", 0},
+	70: {"New_LPZ_Spr", 0},
+	71: {"Brick_Bloon_Spr", 2},
+	72: {"Panel_Shield_Moab", 0},
+	73: {"Panel_BFB", 0},
+	74: {"Panel_Moab", 0},
+	75: {"Rainbow_Bloon_Spr", 6},
+	76: {"Brick_Bloon_Spr", 3},
+	77: {"Panel_BFB", 0},
+	78: {"Panel_DDT", 1},
+	79: {"Panel_HTA", 0},
+	80: {"Ceramic_Bloon_Spr", 6},
+	81: {"Panel_BRC", 0},
+	82: {"Rainbow_Bloon_Spr", 3},
+	83: {"Panel_ZOMG", 0},
+	84: {"Panel_DDT", 0},
+	85: {"New_LPZ_Spr", 0},
+	86: {"Panel_Shield_Moab", 0},
+	87: {"Panel_HTA", 0},
+	88: {"Panel_DDT", 0},
+	89: {"Panel_Shield_BFB", 0},
+	90: {"Panel_ZOMG", 0},
+}
+
+// wavePanelIconNightmare is the hardcoded table for nightmare mode (60 waves).
+var wavePanelIconNightmare = [61]wavePanelIcon{
+	0:  {"Red_Bloon_Spr", 0},
+	1:  {"Red_Bloon_Spr", 0},
+	2:  {"Blue_Bloon_Spr", 0},
+	3:  {"Blue_Bloon_Spr", 1},
+	4:  {"Green_Bloon_Spr", 0},
+	5:  {"Red_Bloon_Spr", 2},
+	6:  {"Green_Bloon_Spr", 1},
+	7:  {"Yellow_Bloon_Spr", 0},
+	8:  {"Lime_Bloon_Spr", 0},
+	9:  {"Stuffed_Bloon_Spr", 0},
+	10: {"Rainbow_Bloon_Spr", 0},
+	11: {"Amber_Bloon_Spr", 3},
+	12: {"Orange_Bloon_Spr", 4},
+	13: {"Cyan_Bloon_Spr", 5},
+	14: {"Yellow_Bloon_Spr", 3},
+	15: {"Super_Shield_Template", 2},
+	16: {"Stuffed_Bloon_Spr", 2},
+	17: {"Purple_Bloon_Spr", 2},
+	18: {"Ninja_Bloon_Spr", 0},
+	19: {"Robo_Bloon_Spr", 0},
+	20: {"Patrol_Bloon_Spr", 0},
+	21: {"Black_Bloon_Spr", 3},
+	22: {"Amber_Bloon_Spr", 4},
+	23: {"Zebra_Bloon_Spr", 5},
+	24: {"Barrier_Bloon_Spr", 0},
+	25: {"Ceramic_Bloon_Spr", 0},
+	26: {"Super_Shield_Template", 13},
+	27: {"Rainbow_Bloon_Spr", 1},
+	28: {"Spectrum_Bloon_Spr", 0},
+	29: {"Panel_Mini", 1},
+	30: {"Planetarium_Bloon_Spr", 0},
+	31: {"Panel_Moab", 0},
+	32: {"Stuffed_Bloon_Spr", 4},
+	33: {"Barrier_Bloon_Spr", 0},
+	34: {"Spectrum_Bloon_Spr", 0},
+	35: {"Panel_Moab", 1},
+	36: {"Barrier_Bloon_Spr", 5},
+	37: {"Super_Shield_Template", 9},
+	38: {"Panel_BRC", 0},
+	39: {"Panel_HTA", 0},
+	40: {"Rocket_Blimp_Spr", 0},
+	41: {"Super_Shielded_Moabs", 0},
+	42: {"Stuffed_Bloon_Spr", 4},
+	43: {"Panel_BFB", 0},
+	44: {"Prismatic_HTA_Spr", 0},
+	45: {"Spectrum_Bloon_Spr", 0},
+	46: {"Super_Shielded_Moabs", 2},
+	47: {"Mega_BRC_Spr", 0},
+	48: {"Panel_DDT", 0},
+	49: {"Prismatic_HTA_Spr", 0},
+	50: {"Rocket_Blimp_Spr", 0},
+	51: {"Mega_BRC_Spr", 0},
+	52: {"Planetarium_Bloon_Spr", 2},
+	53: {"Prismatic_HTA_Spr", 0},
+	54: {"Deadly_DDT_Spr", 0},
+	55: {"Storm_LPZ_Spr", 1},
+	56: {"Shielded_ZOMG_Spr", 0},
+	57: {"Mega_BRC_Spr", 0},
+	58: {"Rocket_Blimp_Spr", 0},
+	59: {"Super_Shielded_Moabs", 0},
+	60: {"Party_Blimp_Spr", 0},
+}
+
+// wavePanelIconFor returns the correct sprite+frame for a wave number given the current mode.
+func wavePanelIconFor(g *engine.Game, wave int) wavePanelIcon {
+	if getGlobal(g, "nightmaremodeselect") == 1 {
+		if wave >= 1 && wave <= 60 {
+			return wavePanelIconNightmare[wave]
+		}
+		return wavePanelIconNightmare[0]
 	}
+	// normal mode and impoppable mode use the same icon table
+	if wave >= 1 && wave <= 90 {
+		return wavePanelIconNormal[wave]
+	}
+	return wavePanelIconNormal[0]
 }
 
 // track-specific controllers

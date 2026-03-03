@@ -177,6 +177,27 @@ func (b *LevelUper) Create(inst *engine.Instance, g *engine.Game) {
 	}
 }
 
+func (b *LevelUper) Step(inst *engine.Instance, g *engine.Game) {
+	// check if we have enough xp to level up
+	xp := getGlobal(g, "XP")
+	criteria := getGlobal(g, "criteria")
+	if criteria <= 0 {
+		criteria = 50
+	}
+
+	for xp >= criteria {
+		xp -= criteria
+		g.GlobalVars["XP"] = xp
+		rank := getGlobal(g, "rank") + 1
+		g.GlobalVars["rank"] = rank
+
+		// scale up the criteria for the next level
+		criteria = 50.0 + rank*25.0
+		g.GlobalVars["criteria"] = criteria
+		fmt.Printf("ranked up to %.0f! next level needs %.0f xp\n", rank, criteria)
+	}
+}
+
 // sound_Control — sets sound volumes
 type SoundControl struct {
 	engine.DefaultBehavior
