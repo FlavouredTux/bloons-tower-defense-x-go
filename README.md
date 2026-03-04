@@ -36,10 +36,14 @@ GOOS=windows GOARCH=amd64 go build -o btdx.exe ./cmd/btdx
 ## what's inside
 
 the game is in a *playable* state right now, but it's nowhere near done. here's what actually works so far:
-- the core btd gameplay loop
-- the first few base towers (dart monkey, ninja, etc.) along with their max tier upgrades and abilities
-- full bloon wave timelines and path spawning
-- main menus, settings, and track selection
+- the core btd gameplay loop (90 waves, all speed modes, auto-start)
+- all 24 towers with their upgrade chains, tier 4/5 paths, and abilities
+- full bloon wave timelines and path spawning across 30+ tracks
+- main menus, track selection, difficulty modes, and modifier flags
+- **bounty center** — boss bloon fights across 4 difficulty tiers with save progress
+- **boss fights** — 6 boss types (Bully, Mother, Clown, LUL, Blooming, Crawler) each with their own rooms and wave configs
+- **career save system** — rank, XP, monkey money, bounty progress, and track milestones saved to disk
+- **credits screen**
 - made with just plain go and ebitengine
 
 more towers and features will get added over time.
