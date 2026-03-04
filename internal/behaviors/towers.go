@@ -15,6 +15,7 @@ import (
 // tower costs for placement (towerselect → cost)
 var towerCosts = map[float64]float64{
 	1: 200, 2: 370, 3: 380, 4: 420, 5: 590, 6: 650,
+	7: 550,
 	8: 450, 9: 450, 10: 510, 12: 470, 13: 810, 14: 600,
 	15: 720, 16: 450, 17: 900, 18: 1200, 19: 780, 20: 950,
 	21: 750, 22: 1250, 23: 1110, 24: 3000,
@@ -24,6 +25,7 @@ var towerCosts = map[float64]float64{
 var towerObjects = map[float64]string{
 	1: "Dart_Monkey", 2: "Tack_Shooter", 3: "Boomerang_Thrower",
 	4: "Sniper_Monkey", 5: "Ninja_Monkey", 6: "Bomb_Cannon",
+	7: "Monkey_Sub",
 	8: "Charge_Tower", 9: "Glue_Gunner_L1", 10: "Ice_Monkey",
 	12: "Monkey_Engineer", 13: "Hanger_0X", 14: "Bloonchipper",
 	15: "Monkey_Alchemist", 16: "Monkey_Apprentice", 17: "Banana_Tree",
@@ -233,8 +235,8 @@ func (b *BlockBehavior) Create(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *BlockBehavior) Step(inst *engine.Instance, g *engine.Game) {
-	// show/hide based on towerplace mode
-	if getGlobal(g, "towerplace") == 1 {
+	// show/hide based on towerplace mode; hide for water-only towers
+	if getGlobal(g, "towerplace") == 1 && !isWaterTowerSelected(g) {
 		if inst.SpriteName == "" {
 			inst.SpriteName = "Block_Spr"
 		}
@@ -246,6 +248,10 @@ func (b *BlockBehavior) Step(inst *engine.Instance, g *engine.Game) {
 
 func (b *BlockBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	if getGlobal(g, "towerplace") != 1 {
+		return
+	}
+	// water-only towers cannot be placed on land blocks
+	if isWaterTowerSelected(g) {
 		return
 	}
 
@@ -307,7 +313,8 @@ func countTowers(g *engine.Game) int {
 	count := 0
 	towerObjectNames := []string{
 		"Dart_Monkey", "Tack_Shooter", "Boomerang_Thrower", "Sniper_Monkey",
-		"Ninja_Monkey", "Bomb_Cannon", "Charge_Tower", "Glue_Gunner_L1",
+		"Ninja_Monkey", "Bomb_Cannon", "Monkey_Sub",
+		"Charge_Tower", "Glue_Gunner_L1",
 		"Ice_Monkey", "Monkey_Engineer", "Hanger_0X", "Bloonchipper",
 		"Monkey_Alchemist", "Monkey_Apprentice", "Banana_Tree", "Monkey_Village",
 		"Mortar_Launcher", "Dartling_Gunner", "Spike_Factory", "AHanger_0X",
@@ -648,6 +655,83 @@ func (b *ScrollDownBehavior) Step(inst *engine.Instance, g *engine.Game) {
 	}
 }
 
+// isWaterTowerSelected returns true if the currently selected tower for placement
+// is a water-only tower (Monkey Sub = 7, Monkey Buccaneer = 11).
+func isWaterTowerSelected(g *engine.Game) bool {
+	sel := getGlobal(g, "towerselect")
+	return sel == 7 || sel == 11
+}
+
+// WaterBehavior — water tile that also acts as a water-tower placement block.
+// Always visible as the water tile; when a water tower is being placed, it
+// highlights with the Water_Block overlay and accepts the click to place the tower.
+type WaterBehavior struct {
+	engine.DefaultBehavior
+}
+
+func (b *WaterBehavior) Create(inst *engine.Instance, g *engine.Game) {
+	inst.SpriteName = "Water_Spr"
+	inst.Visible = true
+	inst.Depth = 2 // behind land blocks
+}
+
+func (b *WaterBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	if getGlobal(g, "towerplace") == 1 && isWaterTowerSelected(g) {
+		inst.SpriteName = "Water_Block_spr"
+	} else {
+		inst.SpriteName = "Water_Spr"
+	}
+}
+
+func (b *WaterBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
+	if getGlobal(g, "towerplace") != 1 || !isWaterTowerSelected(g) {
+		return
+	}
+
+	towerSel := getGlobal(g, "towerselect")
+	cost, hasCost := towerCosts[towerSel]
+	if !hasCost {
+		return
+	}
+
+	money := getGlobal(g, "money")
+	if money < cost {
+		return
+	}
+
+	objName, hasObj := towerObjects[towerSel]
+	if !hasObj {
+		return
+	}
+
+	// check tower limit
+	towerLimit := getGlobal(g, "towerlimit")
+	if float64(countTowers(g)) >= towerLimit {
+		return
+	}
+
+	tower := g.InstanceMgr.Create(objName, inst.X+16, inst.Y+16)
+	if tower != nil {
+		tower.Depth = -2
+		tower.Vars["invested"] = cost
+		fmt.Printf("Placed %s (water) at (%.0f, %.0f) for $%.0f\n", objName, inst.X+16, inst.Y+16, cost)
+	}
+
+	g.GlobalVars["money"] = money - cost
+	g.AudioMgr.Play("Tower_Place")
+	g.GlobalVars["towerplace"] = 0.0
+	g.GlobalVars["towerselect"] = 0.0
+
+	// hide all land blocks
+	for _, block := range g.InstanceMgr.FindByObject("Block") {
+		block.Visible = false
+		block.SpriteName = ""
+	}
+
+	// mark this water tile as occupied (prevent stacking towers)
+	inst.Vars["occupied"] = 1.0
+}
+
 // registerTowerBehaviors registers all tower and panel behaviors
 func RegisterTowerBehaviors(im *engine.InstanceManager) {
 	// tower buy panels
@@ -664,6 +748,7 @@ func RegisterTowerBehaviors(im *engine.InstanceManager) {
 
 	// block placement
 	im.RegisterBehavior("Block", func() engine.InstanceBehavior { return &BlockBehavior{} })
+	im.RegisterBehavior("Water", func() engine.InstanceBehavior { return &WaterBehavior{} })
 	im.RegisterBehavior("Scroll_Up", func() engine.InstanceBehavior { return &ScrollUpBehavior{} })
 	im.RegisterBehavior("Scroll_Down", func() engine.InstanceBehavior { return &ScrollDownBehavior{} })
 

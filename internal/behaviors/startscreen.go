@@ -9,6 +9,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"btdx/internal/engine"
+	"btdx/internal/savedata"
 )
 
 // need this for fmt.Sprintf in CareerControl
@@ -332,6 +333,11 @@ func (b *CareerControl) Create(inst *engine.Instance, g *engine.Game) {
 	g.GlobalVars["nightmaremodeselect"] = 0.0
 	g.GlobalVars["totalachievements"] = 0.0
 	g.GlobalVars["PopUp"] = 0.0
+
+	// load saved career data (overwrites defaults for any key present in the file)
+	if err := savedata.Load(g); err != nil {
+		fmt.Printf("WARNING: could not load save data: %v\n", err)
+	}
 
 	// move to origin
 	inst.X = 0

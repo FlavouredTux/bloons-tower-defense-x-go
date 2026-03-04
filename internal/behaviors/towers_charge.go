@@ -2,6 +2,8 @@ package behaviors
 
 import (
 	"math"
+	"math/rand"
+	"sort"
 
 	"btdx/internal/engine"
 )
@@ -29,6 +31,8 @@ type chargeTowerForm struct {
 	ProjSpeed    float64
 	AbilityMax   float64
 	RotSpeed     float64 // degrees per step for tower sprite rotation
+	Beam         bool    // true: static line-scan beam (Tesla/Giga path); not a moving projectile
+	BeamLifetime int     // alarm[0] frames for the beam visual (4 or 7 in GML)
 }
 
 var chargeTowerForms = map[string]chargeTowerForm{
@@ -56,17 +60,19 @@ var chargeTowerForms = map[string]chargeTowerForm{
 		Range: 112, ChargeThresh: 40, AlarmRate: 7, FireDelay: 1,
 		StunDec: 4, Lead: 1, Camo: 0,
 		Projectile: "Powerful_Charge", ProjPP: 4, ProjLP: 1, ProjSpeed: 24,
+		RotSpeed: 3,
 	},
 	"Charge_Burst": {
 		Range: 112, ChargeThresh: 40, AlarmRate: 7, FireDelay: 1,
 		StunDec: 10, Lead: 1, Camo: 0,
 		Projectile: "Burst_Charge", ProjPP: 4, ProjLP: 1, ProjSpeed: 26,
+		RotSpeed: 3,
 	},
 	"Charge_Overload": {
 		Range: 115, ChargeThresh: 40, AlarmRate: 6, FireDelay: 1,
 		StunDec: 10, Lead: 1, Camo: 0,
 		Projectile: "Burst_Charge", ProjPP: 4, ProjLP: 1, ProjSpeed: 26,
-		AbilityMax: 33,
+		RotSpeed: 3, AbilityMax: 33,
 	},
 	// ── path 2 (middle): Orbital ────────────────────────────────────
 	"Orbital_Discharge": {
@@ -82,20 +88,25 @@ var chargeTowerForms = map[string]chargeTowerForm{
 		RotSpeed: 1,
 	},
 	// ── path 3 (right): Tesla ───────────────────────────────────────
+	// GML: fires Small_Energy with speed=0 (static beam), range=4 → alarm[0]=4 frames.
+	// Beam line-scans bloons from tower to target.
 	"Tesla_Coil": {
 		Range: 112, ChargeThresh: 24, AlarmRate: 12, FireDelay: 2,
 		StunDec: 30, Lead: 1, Camo: 0,
-		Projectile: "Small_Energy", ProjPP: 30, ProjLP: 1, ProjSpeed: 32,
+		Projectile: "Small_Energy", ProjPP: 30, ProjLP: 1,
+		Beam: true, BeamLifetime: 4,
 	},
 	"Giga_Pops": {
 		Range: 112, ChargeThresh: 60, AlarmRate: 7, FireDelay: 1,
 		StunDec: 70, Lead: 1, Camo: 1,
-		Projectile: "Big_Energy", ProjPP: 70, ProjLP: 1, ProjSpeed: 36,
+		Projectile: "Big_Energy", ProjPP: 70, ProjLP: 1,
+		Beam: true, BeamLifetime: 7,
 	},
 	"Lightning_Bomb": {
 		Range: 112, ChargeThresh: 60, AlarmRate: 7, FireDelay: 1,
 		StunDec: 70, Lead: 1, Camo: 1,
-		Projectile: "Big_Energy", ProjPP: 70, ProjLP: 1, ProjSpeed: 36,
+		Projectile: "Big_Energy", ProjPP: 70, ProjLP: 1,
+		Beam: true, BeamLifetime: 7,
 		AbilityMax: 35,
 	},
 	// ── special path (0): Super / Mega ──────────────────────────────
@@ -266,7 +277,11 @@ func (b *ChargeTowerBehavior) fireProjectile(inst *engine.Instance, g *engine.Ga
 	baseAngle := math.Atan2(-dy, dx)
 	inst.ImageAngle = baseAngle * 180 / math.Pi
 
-	// Orbital/Magnetic projectiles follow spiral GMX paths relative to the tower.
+	// Beam (Tesla / Giga) — static line-scan hit, no moving projectile.
+	if form.Beam {
+		b.fireBeam(inst, g, form, target)
+		return
+	}
 	// They do NOT aim at the target — they expand outward in a square spiral.
 	switch form.Projectile {
 	case "Orbital_Charge", "Magnetic_Charge":
@@ -316,19 +331,86 @@ func (b *ChargeTowerBehavior) fireProjectile(inst *engine.Instance, g *engine.Ga
 	proj.Vars["leadpop"] = form.Lead
 	proj.Vars["camopop"] = form.Camo
 
-	// AoE projectiles (Super_Charge, Mega_Charge, Mega_Mega_Charge) use explode_radius
-	switch form.Projectile {
-	case "Super_Charge":
-		proj.Vars["explode_radius"] = 20.0
-		proj.Alarms[1] = 30 // lifetime before exploding
-	case "Mega_Charge":
-		proj.Vars["explode_radius"] = 30.0
-		proj.Alarms[1] = 40
-	case "Mega_Mega_Charge":
-		proj.Vars["explode_radius"] = 40.0
-		proj.ImageXScale = 1.5
-		proj.ImageYScale = 1.5
-		proj.Alarms[1] = 50
+}
+
+// fireBeam performs a line-scan hit from tower to target (Tesla / Giga path).
+// Mirrors GML: Small_Energy / Big_Energy spawned with speed=0, rotated toward target,
+// hits bloons along the beam via sprite-mask collision (simulated here as line-segment check).
+func (b *ChargeTowerBehavior) fireBeam(inst *engine.Instance, g *engine.Game, form chargeTowerForm, target *engine.Instance) {
+	dx := target.X - inst.X
+	dy := target.Y - inst.Y
+	dist := math.Sqrt(dx*dx + dy*dy)
+	beamAngle := math.Atan2(-dy, dx) * 180 / math.Pi
+	if dist < 1 {
+		dist = 1
+	}
+
+	// Line-segment halfwidth that bloons must be within to get hit.
+	lineWidth := 18.0
+	if form.Projectile == "Big_Energy" {
+		lineWidth = 28.0
+	}
+
+	ppRem := form.ProjPP + getVar(inst, "ppbuff")
+	lpVal := form.ProjLP
+	camoOK := form.Camo == 1
+
+	// Collect bloons within the beam line-segment, sorted by distance from tower.
+	type beamBloon struct {
+		inst *engine.Instance
+		dist float64
+	}
+	var candidates []beamBloon
+	for _, bloon := range g.InstanceMgr.FindByObject("Normal_Bloon_Branch") {
+		if bloon.Destroyed {
+			continue
+		}
+		if getVar(bloon, "camo") == 1 && !camoOK {
+			continue
+		}
+		// Project bloon onto the beam line segment.
+		bx := bloon.X - inst.X
+		by := bloon.Y - inst.Y
+		t := (bx*dx + by*dy) / (dist * dist)
+		if t < 0 {
+			t = 0
+		}
+		if t > 1 {
+			t = 1
+		}
+		nearX := t * dx
+		nearY := t * dy
+		lineD := math.Sqrt((bx-nearX)*(bx-nearX) + (by-nearY)*(by-nearY))
+		if lineD <= lineWidth {
+			dFromTower := math.Sqrt(bx*bx + by*by)
+			candidates = append(candidates, beamBloon{bloon, dFromTower})
+		}
+	}
+	// Sort by distance from tower (hit nearest first).
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].dist < candidates[j].dist })
+	for _, c := range candidates {
+		if ppRem <= 0 {
+			break
+		}
+		popBloon(c.inst, lpVal, g)
+		ppRem--
+	}
+
+	// Spawn visual-only beam at tower position (speed=0, oriented toward target).
+	vis := g.InstanceMgr.Create(form.Projectile, inst.X, inst.Y)
+	if vis != nil {
+		vis.HSpeed = 0
+		vis.VSpeed = 0
+		vis.Direction = beamAngle
+		vis.ImageAngle = beamAngle
+		vis.Vars["visual_only"] = 1.0
+		vis.Vars["LP"] = 0.0
+		vis.Vars["PP"] = 0.0
+		lifetime := form.BeamLifetime
+		if lifetime <= 0 {
+			lifetime = 4
+		}
+		vis.Alarms[0] = lifetime
 	}
 }
 
@@ -608,6 +690,253 @@ func (b *OrbitalChargeBehavior) Alarm(inst *engine.Instance, idx int, g *engine.
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BurstChargeBehavior — Burst_Charge projectile.
+// Travels normally; on alarm[0] (range expiry) explodes into 4 Charge_Proj
+// fragments in cardinal directions before destroying itself.
+// GML Burst_Charge event 4 (outside room): multi=1, repeat(4) create Charge_Proj
+// at direction=90*multi, speed=20, alarm[0]=4, PP=self.PP-1; then destroy.
+// ─────────────────────────────────────────────────────────────────────────────
+type BurstChargeBehavior struct {
+	engine.DefaultBehavior
+}
+
+func (b *BurstChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
+	if _, ok := inst.Vars["LP"]; !ok {
+		inst.Vars["LP"] = 1.0
+	}
+	if _, ok := inst.Vars["PP"]; !ok {
+		inst.Vars["PP"] = 4.0
+	}
+	if _, ok := inst.Vars["leadpop"]; !ok {
+		inst.Vars["leadpop"] = 1.0
+	}
+	if _, ok := inst.Vars["camopop"]; !ok {
+		inst.Vars["camopop"] = 0.0
+	}
+	inst.Alarms[0] = 14
+}
+
+func (b *BurstChargeBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	inst.ImageAngle = inst.Direction
+	if getVar(inst, "PP") <= 0 {
+		b.burst(inst, g)
+		return
+	}
+	projectileHitBloons(inst, g, 12)
+}
+
+func (b *BurstChargeBehavior) Alarm(inst *engine.Instance, idx int, g *engine.Game) {
+	if idx == 0 {
+		b.burst(inst, g)
+	}
+}
+
+func (b *BurstChargeBehavior) burst(inst *engine.Instance, g *engine.Game) {
+	pp := getVar(inst, "PP")
+	lead := getVar(inst, "leadpop")
+	camo := getVar(inst, "camopop")
+	// 4 fragments at 90°, 180°, 270°, 360°(=0°)
+	for multi := 1; multi <= 4; multi++ {
+		angle := float64(multi) * 90.0
+		angleRad := angle * math.Pi / 180.0
+		frag := g.InstanceMgr.Create("Charge_Proj", inst.X, inst.Y)
+		if frag == nil {
+			continue
+		}
+		childPP := pp - 1
+		if childPP < 1 {
+			childPP = 1
+		}
+		frag.Vars["LP"] = 1.0
+		frag.Vars["PP"] = childPP
+		frag.Vars["leadpop"] = lead
+		frag.Vars["camopop"] = camo
+		frag.Direction = angle
+		frag.ImageAngle = angle
+		frag.HSpeed = math.Cos(angleRad) * 20
+		frag.VSpeed = -math.Sin(angleRad) * 20
+		frag.Alarms[0] = 4
+	}
+	g.InstanceMgr.Destroy(inst.ID)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MegaChargeBehavior — Mega_Charge projectile.
+// On each bloon hit, spawns 4 Mega_Proj in random 90°-spread directions.
+// GML collision event: PP -= 2, multi=random(1), repeat(4){Mega_Proj at 90*multi}
+// ─────────────────────────────────────────────────────────────────────────────
+type MegaChargeBehavior struct {
+	engine.DefaultBehavior
+}
+
+func (b *MegaChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
+	if _, ok := inst.Vars["LP"]; !ok {
+		inst.Vars["LP"] = 1.0
+	}
+	if _, ok := inst.Vars["PP"]; !ok {
+		inst.Vars["PP"] = 20.0
+	}
+	if _, ok := inst.Vars["leadpop"]; !ok {
+		inst.Vars["leadpop"] = 1.0
+	}
+	if _, ok := inst.Vars["camopop"]; !ok {
+		inst.Vars["camopop"] = 0.0
+	}
+	inst.Alarms[0] = 14
+}
+
+func (b *MegaChargeBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	inst.ImageAngle = inst.Direction
+	pp := getVar(inst, "PP")
+	if pp <= 0 {
+		g.InstanceMgr.Destroy(inst.ID)
+		return
+	}
+	lead := getVar(inst, "leadpop")
+	camo := getVar(inst, "camopop")
+	lp := getVar(inst, "LP")
+	for _, bloon := range g.InstanceMgr.FindByObject("Normal_Bloon_Branch") {
+		if bloon.Destroyed {
+			continue
+		}
+		if getVar(bloon, "lead") == 1 && lead == 0 {
+			continue
+		}
+		if getVar(bloon, "camo") == 1 && camo == 0 {
+			continue
+		}
+		dx := inst.X - bloon.X
+		dy := inst.Y - bloon.Y
+		if math.Sqrt(dx*dx+dy*dy) >= 14 {
+			continue
+		}
+		// Hit!
+		popBloon(bloon, lp, g)
+		pp -= 2
+		inst.Vars["PP"] = pp
+		// Spawn 4 Mega_Proj in random 90°-spread
+		randOffset := rand.Float64() * 90
+		for i := 0; i < 4; i++ {
+			angle := randOffset + float64(i)*90
+			angleRad := angle * math.Pi / 180.0
+			frag := g.InstanceMgr.Create("Mega_Proj", inst.X, inst.Y)
+			if frag == nil {
+				continue
+			}
+			frag.Vars["LP"] = 2.0
+			frag.Vars["PP"] = 2.0
+			frag.Vars["leadpop"] = lead
+			frag.Vars["camopop"] = camo
+			frag.Direction = angle
+			frag.ImageAngle = angle
+			frag.HSpeed = math.Cos(angleRad) * 21
+			frag.VSpeed = -math.Sin(angleRad) * 21
+			frag.Alarms[0] = 5
+		}
+		if pp <= 0 {
+			g.InstanceMgr.Destroy(inst.ID)
+			return
+		}
+	}
+}
+
+func (b *MegaChargeBehavior) Alarm(inst *engine.Instance, idx int, g *engine.Game) {
+	if idx == 0 {
+		g.InstanceMgr.Destroy(inst.ID)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MegaMegaChargeBehavior — Mega_Mega_Charge projectile.
+// Like MegaChargeBehavior but spawns Mega_Mega_Proj with a rotating phase offset
+// (+10° per hit), making each splash rotate slightly from the previous.
+// ─────────────────────────────────────────────────────────────────────────────
+type MegaMegaChargeBehavior struct {
+	engine.DefaultBehavior
+}
+
+func (b *MegaMegaChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
+	if _, ok := inst.Vars["LP"]; !ok {
+		inst.Vars["LP"] = 1.0
+	}
+	if _, ok := inst.Vars["PP"]; !ok {
+		inst.Vars["PP"] = 100.0
+	}
+	if _, ok := inst.Vars["leadpop"]; !ok {
+		inst.Vars["leadpop"] = 1.0
+	}
+	if _, ok := inst.Vars["camopop"]; !ok {
+		inst.Vars["camopop"] = 0.0
+	}
+	inst.Vars["phase"] = rand.Float64() * 90
+	inst.Alarms[0] = 14
+}
+
+func (b *MegaMegaChargeBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	inst.ImageAngle = inst.Direction
+	pp := getVar(inst, "PP")
+	if pp <= 0 {
+		g.InstanceMgr.Destroy(inst.ID)
+		return
+	}
+	lead := getVar(inst, "leadpop")
+	camo := getVar(inst, "camopop")
+	lp := getVar(inst, "LP")
+	phase := getVar(inst, "phase")
+	for _, bloon := range g.InstanceMgr.FindByObject("Normal_Bloon_Branch") {
+		if bloon.Destroyed {
+			continue
+		}
+		if getVar(bloon, "lead") == 1 && lead == 0 {
+			continue
+		}
+		if getVar(bloon, "camo") == 1 && camo == 0 {
+			continue
+		}
+		dx := inst.X - bloon.X
+		dy := inst.Y - bloon.Y
+		if math.Sqrt(dx*dx+dy*dy) >= 16 {
+			continue
+		}
+		// Hit!
+		popBloon(bloon, lp, g)
+		pp -= 2
+		inst.Vars["PP"] = pp
+		// Spawn 4 Mega_Mega_Proj at 90° intervals offset by phase
+		randOffset := rand.Float64() * 90
+		for i := 0; i < 4; i++ {
+			angle := randOffset + float64(i)*90 + phase
+			angleRad := angle * math.Pi / 180.0
+			frag := g.InstanceMgr.Create("Mega_Mega_Proj", inst.X, inst.Y)
+			if frag == nil {
+				continue
+			}
+			frag.Vars["LP"] = 3.0
+			frag.Vars["PP"] = 3.0
+			frag.Vars["leadpop"] = lead
+			frag.Vars["camopop"] = camo
+			frag.Direction = angle
+			frag.ImageAngle = angle
+			frag.HSpeed = math.Cos(angleRad) * 24
+			frag.VSpeed = -math.Sin(angleRad) * 24
+			frag.Alarms[0] = 6
+		}
+		phase += 10
+		inst.Vars["phase"] = phase
+		if pp <= 0 {
+			g.InstanceMgr.Destroy(inst.ID)
+			return
+		}
+	}
+}
+
+func (b *MegaMegaChargeBehavior) Alarm(inst *engine.Instance, idx int, g *engine.Game) {
+	if idx == 0 {
+		g.InstanceMgr.Destroy(inst.ID)
+	}
+}
+
 // EnergyProjBehavior handles Small_Energy and Big_Energy (tesla lightning bolts).
 // These travel fast and have a wide hit radius, approximating instant-strike chain lightning.
 type EnergyProjBehavior struct {
@@ -633,6 +962,10 @@ func (b *EnergyProjBehavior) Create(inst *engine.Instance, g *engine.Game) {
 
 func (b *EnergyProjBehavior) Step(inst *engine.Instance, g *engine.Game) {
 	inst.ImageAngle = inst.Direction
+	// visual_only: spawned by fireBeam as a static visual, no damage.
+	if getVar(inst, "visual_only") == 1 {
+		return
+	}
 	if getVar(inst, "PP") <= 0 {
 		g.InstanceMgr.Destroy(inst.ID)
 		return

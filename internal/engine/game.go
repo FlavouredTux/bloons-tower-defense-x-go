@@ -106,8 +106,9 @@ func (g *Game) Update() error {
 	g.tickAccum += dt
 
 	// limit ticks per frame to avoid runaway updates
+	// raised to 10 to allow secret 10x mode (300 tps = 5 ticks/frame at 60fps)
 	ticksThisFrame := 0
-	const maxTicksPerFrame = 4
+	const maxTicksPerFrame = 10
 
 	for g.tickAccum >= g.tickInterval && ticksThisFrame < maxTicksPerFrame {
 		g.tickAccum -= g.tickInterval

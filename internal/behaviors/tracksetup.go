@@ -3,9 +3,19 @@ package behaviors
 import (
 	"btdx/internal/engine"
 	"fmt"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
+
+// pendingModTooltip holds the modifier hover tooltip to draw this frame.
+// It is populated by modifierToggle.Draw and consumed by scoreAndTimeDraw.Draw.
+var pendingModTooltip struct {
+	active      bool
+	mx, my      float64
+	description string // may contain '#' as a line-break
+	pointsText  string
+}
 
 // track_Setup_II room behaviors
 // mode selection, wave counts, modifiers, and Play button
@@ -270,10 +280,14 @@ func (b *PlayBar) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	}
 }
 
-// unlockTowers sets tower lock globals based on rank
-// rank 0: Dart + Tack always available
-// higher ranks unlock more towers in pairs
 func (b *PlayBar) unlockTowers(g *engine.Game) {
+	unlockTowersForRank(g)
+}
+
+// unlockTowersForRank sets tower lock globals based on rank.
+// rank 0: Dart + Tack always available; higher ranks unlock more towers in pairs.
+// Exported as a package-level function so both PlayBar and BountyGoBehavior can call it.
+func unlockTowersForRank(g *engine.Game) {
 	rank := getGlobal(g, "rank")
 
 	// base towers always unlocked
@@ -298,8 +312,8 @@ func (b *PlayBar) unlockTowers(g *engine.Game) {
 		g.GlobalVars["IMlock"] = 1.0 // ice Monkey
 	}
 	if rank >= 5 {
-		g.GlobalVars["MElock"] = 1.0  // monkey Engineer
-		g.GlobalVars["MBlock"] = 1.0  // monkey Buccaneer
+		g.GlobalVars["MElock"] = 1.0 // monkey Engineer
+		g.GlobalVars["MBlock"] = 1.0 // monkey Buccaneer
 	}
 	if rank >= 6 {
 		g.GlobalVars["MAlock"] = 1.0  // monkey Ace
@@ -331,7 +345,9 @@ func (b *PlayBar) unlockTowers(g *engine.Game) {
 // each toggles a global between 0 and 1 on click
 type modifierToggle struct {
 	engine.DefaultBehavior
-	GlobalKey string
+	GlobalKey   string
+	Description string // may contain '#' as a line-break (GameMaker convention)
+	PointsText  string // e.g. "x1.6 Points"
 }
 
 func (b *modifierToggle) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
@@ -372,6 +388,71 @@ func (b *modifierToggle) Draw(inst *engine.Instance, screen *ebiten.Image, g *en
 	}
 	engine.DrawSpriteExt(screen, spr.Frames[frame], spr.XOrigin, spr.YOrigin,
 		inst.X, inst.Y, inst.ImageXScale, inst.ImageYScale, inst.ImageAngle, inst.ImageAlpha)
+
+	if hover {
+		// Store tooltip data to be drawn this frame by the top-layer draw object.
+		pendingModTooltip.active = true
+		pendingModTooltip.mx = float64(g.InputMgr.MouseX)
+		pendingModTooltip.my = float64(g.InputMgr.MouseY)
+		pendingModTooltip.description = b.Description
+		pendingModTooltip.pointsText = b.PointsText
+	}
+}
+
+// scoreAndTimeDraw — Score_and_Time_Draw object in Track_Setup_II.
+// Draws nothing itself but forces depth = -1001 so its Draw runs last in the
+// room, letting it render the modifier hover tooltip on top of everything else.
+type scoreAndTimeDraw struct {
+	engine.DefaultBehavior
+}
+
+func (b *scoreAndTimeDraw) Create(inst *engine.Instance, g *engine.Game) {
+	inst.Depth = -1001
+}
+
+func (b *scoreAndTimeDraw) Draw(inst *engine.Instance, screen *ebiten.Image, g *engine.Game) {
+	if !pendingModTooltip.active {
+		return
+	}
+	// Consume the pending tooltip so it clears after one frame.
+	p := pendingModTooltip
+	pendingModTooltip.active = false
+
+	drawModifierTooltip(screen, g, p.mx, p.my, p.description, p.pointsText)
+}
+
+// drawModifierTooltip renders the hover tooltip for a modifier button using
+// the same Tower_Info_Panel_Spr sprite used by the in-game tower buy tooltip.
+// Description may contain '#' as a line-break (GameMaker convention).
+// When rank < 20 a "Rank 20 Needed" message is shown instead.
+func drawModifierTooltip(screen *ebiten.Image, g *engine.Game, mx, my float64, description, pointsText string) {
+	var line1, line2, bottom string
+	if getGlobal(g, "rank") < 20 {
+		line1 = "Rank 20 Needed"
+	} else {
+		parts := strings.SplitN(description, "#", 2)
+		line1 = parts[0]
+		if len(parts) > 1 {
+			line2 = parts[1]
+		}
+		bottom = pointsText
+	}
+
+	const panelScale = 1.3
+	if tip := g.AssetManager.GetSprite("Tower_Info_Panel_Spr"); tip != nil && len(tip.Frames) > 0 {
+		engine.DrawSpriteExt(screen, tip.Frames[0], tip.XOrigin, tip.YOrigin, mx, my, panelScale, panelScale, 0, 1)
+	}
+
+	// Text positions scaled proportionally from the sprite origin (125, 16).
+	if line2 != "" {
+		drawHUDTextSmall(screen, g, line1, mx-155, my-14, hudColorBlack)
+		drawHUDTextSmall(screen, g, line2, mx-155, my-2, hudColorBlack)
+	} else {
+		drawHUDTextSmall(screen, g, line1, mx-155, my-8, hudColorBlack)
+	}
+	if bottom != "" {
+		drawHUDTextSmall(screen, g, bottom, mx-78, my+21, hudColorBlack)
+	}
 }
 
 // wave count arrow displays (Norm_40, Impo_35, Night_30, etc.)
@@ -549,20 +630,34 @@ func RegisterTrackSetupBehaviors(im *engine.InstanceManager) {
 		return &bloonInfoBehavior{}
 	})
 
-	// modifier toggles
-	modifiers := map[string]string{
-		"Six_Towers":       "sixtowers",
-		"Random_Towers":    "randomtowers",
-		"Wave_Squeeze":     "wavesqueeze",
-		"Wave_Skip":        "waveskip",
-		"Faster_Bloons":    "fasterbloons",
-		"Stronger_Bloons":  "strongerbloons",
-		"No_Lives_Lost":    "noliveslost",
+	// top-layer draw object — renders modifier hover tooltip above all other UI
+	im.RegisterBehavior("Score_and_Time_Draw", func() engine.InstanceBehavior {
+		return &scoreAndTimeDraw{}
+	})
+
+	// modifier toggles (description uses '#' as a line-break, matching the original GML)
+	type modCfg struct {
+		globalKey   string
+		description string
+		pointsText  string
 	}
-	for objName, globalKey := range modifiers {
-		gk := globalKey // capture
+	modifiers := map[string]modCfg{
+		"Six_Towers":      {"sixtowers", "Six Towers Only", "x1.6 Points"},
+		"Random_Towers":   {"randomtowers", "Random#Selection", "x2.2 Points"},
+		"Wave_Squeeze":    {"wavesqueeze", "Shorter Waves", "x1.6 Points"},
+		"Wave_Skip":       {"waveskip", "Skips Waves#Sometimes", "x2 Points"},
+		"Faster_Bloons":   {"fasterbloons", "Bloons move#faster", "x1.45 Points"},
+		"Stronger_Bloons": {"strongerbloons", "Big Bloons#have more hp", "x1.35 Points"},
+		"No_Lives_Lost":   {"noliveslost", "1 Life Only", "x1.25 Points"},
+	}
+	for objName, cfg := range modifiers {
+		c := cfg // capture
 		im.RegisterBehavior(objName, func() engine.InstanceBehavior {
-			return &modifierToggle{GlobalKey: gk}
+			return &modifierToggle{
+				GlobalKey:   c.globalKey,
+				Description: c.description,
+				PointsText:  c.pointsText,
+			}
 		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"btdx/internal/engine"
+	"btdx/internal/savedata"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	etext "github.com/hajimehoshi/ebiten/v2/text"
@@ -51,6 +52,19 @@ func (b *GoBehavior) Create(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *GoBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	// right-click anywhere on/near the Go button toggles 10x speed.
+	// done here in Step (global right-click check with manual proximity test)
+	// so it works regardless of whether the sprite bbox check succeeds.
+	if g.InputMgr.MouseRightPressed() {
+		mx, my := g.GetMouseRoomPos()
+		const hitRadius = 48.0
+		dx := mx - inst.X
+		dy := my - inst.Y
+		if dx*dx+dy*dy <= hitRadius*hitRadius {
+			b.toggleHyperSpeed(inst, g)
+			return
+		}
+	}
 	// iMPORTANT: Do this in Step (not Create) to avoid lock re-entry deadlock
 	// when room instances are being created.
 	if !b.autoButtonChecked {
@@ -129,6 +143,11 @@ func (b *GoBehavior) Step(inst *engine.Instance, g *engine.Game) {
 		g.GlobalVars["points"] = pts
 		g.GlobalVars["cashwavereward"] = 0.0
 		b.afterwave = 1
+
+		// auto-save career progression after each wave (XP, points, high scores)
+		if err := savedata.Save(g); err != nil {
+			fmt.Printf("WARNING: could not auto-save: %v\n", err)
+		}
 	}
 
 	// auto-start: when autostart=1 and between waves, auto-trigger next wave
@@ -140,6 +159,23 @@ func (b *GoBehavior) Step(inst *engine.Instance, g *engine.Game) {
 // mouseLeftPressed — start next wave or toggle speed
 func (b *GoBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	b.handleWaveStart(inst, g)
+}
+
+func (b *GoBehavior) toggleHyperSpeed(inst *engine.Instance, g *engine.Game) {
+	if getGlobal(g, "gamespeed") == 300 {
+		g.SetGameSpeed(30)
+		g.GlobalVars["gamespeed"] = 30.0
+		b.shiftpress = 0
+	} else {
+		g.SetGameSpeed(300)
+		g.GlobalVars["gamespeed"] = 300.0
+	}
+}
+
+// mouseRightPressed — secret 10x speed toggle (300 FPS)
+// kept here as fallback; Step also handles it for cases where bbox check misses.
+func (b *GoBehavior) MouseRightPressed(inst *engine.Instance, g *engine.Game) {
+	b.toggleHyperSpeed(inst, g)
 }
 
 // keyPress — space bar also starts waves / toggles speed
@@ -228,6 +264,22 @@ func (b *GoBehavior) startNextWave(inst *engine.Instance, g *engine.Game) {
 	}
 	b.afterwave = 0
 	g.GlobalVars["wave"] = float64(wave + 1)
+
+	// bloon intro popup: show a card for the new bloon type on specific waves
+	if getGlobal(g, "blooninfo") == 1 {
+		newWave := wave + 1
+		spawn := false
+		if getGlobal(g, "normalmodeselect") == 1 {
+			spawn = bloonsIndicatorWavesNormal[newWave]
+		} else if getGlobal(g, "nightmaremodeselect") == 1 {
+			spawn = bloonsIndicatorWavesNightmare[newWave]
+		}
+		if spawn && g.InstanceMgr.InstanceCount("Bloons_Indicator") == 0 {
+			// spawn below screen; with speed=75 friction=5 it travels 600px upward,
+			// landing at y=320 which centers the 256px card (yorigin=160) on the 576px screen.
+			g.InstanceMgr.Create("Bloons_Indicator", 512, 920)
+		}
+	}
 }
 
 // draw renders the Go button sprite plus speed indicator bars
@@ -1110,6 +1162,115 @@ func wavePanelIconFor(g *engine.Game, wave int) wavePanelIcon {
 	return wavePanelIconNormal[0]
 }
 
+// bloonsIndicatorWavesNormal maps wave numbers (post-increment) that trigger a
+// Bloons_Indicator popup in normal mode — matches original Go.object.gmx DnD code.
+var bloonsIndicatorWavesNormal = map[int]bool{
+	6: true, 8: true, 12: true, 16: true, 20: true, 23: true,
+	30: true, 32: true, 40: true, 57: true, 59: true, 70: true,
+	78: true, 83: true,
+}
+
+// bloonsIndicatorWavesNightmare maps trigger waves for nightmare mode.
+var bloonsIndicatorWavesNightmare = map[int]bool{
+	9: true, 15: true, 18: true, 19: true, 20: true, 24: true,
+	28: true, 30: true, 40: true, 44: true, 47: true, 54: true,
+	55: true, 60: true,
+}
+
+// BloonsIndicatorBehavior — "new bloon" info card that slides in from below.
+// Sprite: New_Bloon_Indicator_spr (35 frames). Clicking it dismisses it.
+type BloonsIndicatorBehavior struct {
+	engine.DefaultBehavior
+	vspeed float64
+}
+
+func (b *BloonsIndicatorBehavior) Create(inst *engine.Instance, g *engine.Game) {
+	inst.Depth = -100
+	inst.ImageSpeed = 0
+	b.vspeed = 75 // pixels/tick upward, matching original speed=75 friction=5
+}
+
+func (b *BloonsIndicatorBehavior) Step(inst *engine.Instance, g *engine.Game) {
+	// slide up with friction until stopped
+	if b.vspeed > 0 {
+		inst.Y -= b.vspeed
+		b.vspeed -= 5
+		if b.vspeed < 0 {
+			b.vspeed = 0
+		}
+	}
+
+	// pick correct frame based on current mode + wave (mirrors Bloons_Indicator step event)
+	wave := int(getGlobal(g, "wave"))
+	if getGlobal(g, "normalmodeselect") == 1 {
+		switch {
+		case wave >= 82:
+			inst.ImageIndex = 14
+		case wave >= 78:
+			inst.ImageIndex = 13
+		case wave >= 70:
+			inst.ImageIndex = 12
+		case wave >= 59:
+			inst.ImageIndex = 11
+		case wave >= 57:
+			inst.ImageIndex = 10
+		case wave >= 40:
+			inst.ImageIndex = 9
+		case wave >= 32:
+			inst.ImageIndex = 8
+		case wave >= 30:
+			inst.ImageIndex = 7
+		case wave >= 23:
+			inst.ImageIndex = 6
+		case wave >= 20:
+			inst.ImageIndex = 5
+		case wave >= 16:
+			inst.ImageIndex = 4
+		case wave >= 12:
+			inst.ImageIndex = 3
+		case wave >= 8:
+			inst.ImageIndex = 2
+		case wave >= 6:
+			inst.ImageIndex = 1
+		}
+	} else if getGlobal(g, "nightmaremodeselect") == 1 {
+		switch {
+		case wave >= 60:
+			inst.ImageIndex = 28
+		case wave >= 55:
+			inst.ImageIndex = 27
+		case wave >= 54:
+			inst.ImageIndex = 26
+		case wave >= 47:
+			inst.ImageIndex = 25
+		case wave >= 44:
+			inst.ImageIndex = 24
+		case wave >= 40:
+			inst.ImageIndex = 23
+		case wave >= 30:
+			inst.ImageIndex = 22
+		case wave >= 28:
+			inst.ImageIndex = 21
+		case wave >= 24:
+			inst.ImageIndex = 20
+		case wave >= 20:
+			inst.ImageIndex = 19
+		case wave >= 19:
+			inst.ImageIndex = 18
+		case wave >= 18:
+			inst.ImageIndex = 17
+		case wave >= 15:
+			inst.ImageIndex = 16
+		case wave >= 9:
+			inst.ImageIndex = 15
+		}
+	}
+}
+
+func (b *BloonsIndicatorBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
+	g.InstanceMgr.Destroy(inst.ID)
+}
+
 // track-specific controllers
 // each sets global.track and track-specific vars
 
@@ -1260,6 +1421,7 @@ func RegisterGameplayBehaviors(im *engine.InstanceManager) {
 	im.RegisterBehavior("auto_start_button", func() engine.InstanceBehavior { return &AutoStartButton{} })
 	im.RegisterBehavior("Upgrade_Sign", func() engine.InstanceBehavior { return &engine.DefaultBehavior{} })
 	im.RegisterBehavior("Wanna_go_to_main_", func() engine.InstanceBehavior { return &WannaGoToMainBehavior{} })
+	im.RegisterBehavior("Bloons_Indicator", func() engine.InstanceBehavior { return &BloonsIndicatorBehavior{} })
 
 	// track controllers — each sets global.track
 	trackControllers := map[string]float64{

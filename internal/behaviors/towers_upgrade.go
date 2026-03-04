@@ -43,11 +43,12 @@ var towerPanelSprites = map[int]string{
 type linearUpgradeRule struct {
 	Cost       float64
 	NextObject string
+	TowerVal   float64 // global.tower value to assign after upgrade (0 = keep current)
 }
 
 var linearUpgradeRules = map[string]linearUpgradeRule{
-	"Dart_Monkey":   {Cost: 160, NextObject: "Dart_Monkey_2"},
-	"Dart_Monkey_2": {Cost: 180, NextObject: "Dart_Monkey_3"},
+	"Dart_Monkey":   {Cost: 160, NextObject: "Dart_Monkey_2", TowerVal: 1.10},
+	"Dart_Monkey_2": {Cost: 180, NextObject: "Dart_Monkey_3", TowerVal: 1.20},
 }
 
 type pathChoiceRule struct {
@@ -106,6 +107,9 @@ var allSelectableTowers = []string{
 	"Monkey_Apprentice", "Banana_Tree", "Monkey_Village",
 	"Mortar_Launcher", "Dartling_Gunner", "Spike_Factory",
 	"AHanger_0X", "Plasma_Monkey_", "Super_Monkey",
+	"Monkey_Sub", "Barbed_Darts_Sub", "Twin_Guns",
+	"Torpedo_Sub", "Airburst_Sub", "Support_Sub", "Smart_Sub",
+	"Bloontonium_Reactor", "Anti_Matter_Reactor",
 }
 
 // towerCodeFraction converts frac(global.tower) to an integer ×1000 for clean comparison
@@ -236,11 +240,10 @@ func applyLinearUpgrade(inst *engine.Instance, g *engine.Game, rule linearUpgrad
 		return true
 	}
 
-	// clear upgrade/selection state so the range circle goes away
-	g.GlobalVars["upgradeselect"] = 0.0
 	g.GlobalVars["up"] = 0.0
-	g.GlobalVars["tower"] = 0.0
 	g.GlobalVars["money"] = getGlobal(g, "money") - rule.Cost
+
+	// Remove the old selection indicator.
 	for _, sign := range g.InstanceMgr.FindByObject("Upgrade_Sign") {
 		g.InstanceMgr.Destroy(sign.ID)
 	}
@@ -250,6 +253,14 @@ func applyLinearUpgrade(inst *engine.Instance, g *engine.Game, rule linearUpgrad
 		newInst.Depth = inst.Depth
 		newInst.Vars["ppbuff"] = getVar(inst, "ppbuff")
 		newInst.Vars["invested"] = getVar(inst, "invested") + rule.Cost
+
+		// Re-select the upgraded tower so the panel stays open.
+		newInst.Vars["select"] = 1.0
+		if rule.TowerVal != 0 {
+			g.GlobalVars["tower"] = rule.TowerVal
+		}
+		g.GlobalVars["upgradeselect"] = 1.0
+		g.InstanceMgr.Create("Upgrade_Sign", newInst.X-16, newInst.Y-16)
 	}
 	g.InstanceMgr.Destroy(inst.ID)
 	return true
