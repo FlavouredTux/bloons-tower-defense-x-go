@@ -124,16 +124,25 @@ type TimelineRunner struct {
 	Looping     bool
 	accumulator float64 // fractional step accumulator for sub-tick speed
 
+	// O(1) step lookup: maps step number → index into Timeline.Steps
+	stepIndex map[int]int
+
 	// callback for executing timeline actions
 	OnAction func(action TimelineAction)
 }
 
 func NewTimelineRunner(tl *TimelineAsset) *TimelineRunner {
-	return &TimelineRunner{
-		Timeline: tl,
-		Speed:    1.0,
-		Running:  true,
+	tr := &TimelineRunner{
+		Timeline:  tl,
+		Speed:     1.0,
+		Running:   true,
+		stepIndex: make(map[int]int, len(tl.Steps)),
 	}
+	// pre-build index for O(1) step lookup
+	for i, step := range tl.Steps {
+		tr.stepIndex[step.Step] = i
+	}
+	return tr
 }
 
 // tick advances the timeline by Speed steps per game tick.
@@ -155,13 +164,12 @@ func (tr *TimelineRunner) Tick() {
 			break
 		}
 
-		// fire actions at the current step
-		for _, step := range tr.Timeline.Steps {
-			if step.Step == tr.CurrentStep {
-				for _, act := range step.Actions {
-					if tr.OnAction != nil {
-						tr.OnAction(act)
-					}
+		// fire actions at the current step — O(1) via index lookup
+		if idx, ok := tr.stepIndex[tr.CurrentStep]; ok {
+			step := tr.Timeline.Steps[idx]
+			for _, act := range step.Actions {
+				if tr.OnAction != nil {
+					tr.OnAction(act)
 				}
 			}
 		}

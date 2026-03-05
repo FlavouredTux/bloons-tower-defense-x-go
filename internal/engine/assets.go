@@ -402,6 +402,23 @@ func (f *BMFont) DrawTextScaled(screen *ebiten.Image, text string, x, y, scale f
 	}
 }
 
+// TextWidthScaled returns the pixel width of the given text at the specified scale.
+func (f *BMFont) TextWidthScaled(text string, scale float64) float64 {
+	if scale <= 0 {
+		scale = 1
+	}
+	w := 0.0
+	for _, ch := range text {
+		g, ok := f.Glyphs[ch]
+		if !ok {
+			w += 8 * scale
+			continue
+		}
+		w += float64(g.Shift) * scale
+	}
+	return w
+}
+
 // loadBMFont loads a bitmap font from a JSON glyph definition and PNG atlas
 func (am *AssetManager) LoadBMFont(name, jsonPath, pngPath string) (*BMFont, error) {
 	// load the atlas image

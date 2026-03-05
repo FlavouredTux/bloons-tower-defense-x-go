@@ -12,9 +12,6 @@ import (
 	"btdx/internal/savedata"
 )
 
-// need this for fmt.Sprintf in CareerControl
-var _ = fmt.Sprintf
-
 // main_Menu_Control — controls the Start_Screen title sequence.
 // on any key/click: starts scrolling down, after 180 frames goes to Main_Menu.
 // also spawns Menu_Bloon (alarm 0) and Menu_Blimp (alarm 5) decorations.
@@ -110,8 +107,8 @@ func (b *MainMenuControl) startTransition(inst *engine.Instance, g *engine.Game)
 	start, _ := inst.Vars["start"].(int)
 	if start == 0 {
 		inst.Vars["start"] = 1
-		// move downward (direction 270 = down)
-		inst.MotionSet(270, 0.1)
+		// move upward (direction 90 = up); original GML uses action_move grid 000000010 = position 8 = UP
+		inst.MotionSet(90, 0.1)
 		inst.Alarms[1] = 180
 
 		rm := g.RoomManager.GetCurrent()
@@ -314,7 +311,7 @@ func (b *CareerControl) Create(inst *engine.Instance, g *engine.Game) {
 		"PML", "PMM", "PMR", "SuML", "SuMM", "SuMR",
 	}
 	for _, p := range towerPaths {
-		g.GlobalVars[p] = 0.0
+		g.GlobalVars[p] = 1.0
 	}
 
 	// bloon toggles

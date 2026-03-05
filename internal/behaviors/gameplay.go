@@ -43,6 +43,13 @@ func (b *GoBehavior) Create(inst *engine.Instance, g *engine.Game) {
 	g.GlobalVars["money"] = 750.0
 	g.GlobalVars["endsequence"] = 0.0
 	g.GlobalVars["life"] = 200.0 - (199.0 * getGlobal(g, "noliveslost"))
+
+	// sandbox: override money and lives
+	if getGlobal(g, "sandbox") == 1 {
+		g.GlobalVars["money"] = 999999.0
+		g.GlobalVars["life"] = 999999.0
+	}
+
 	g.GlobalVars["points"] = 0.0
 	g.GlobalVars["gamespeed"] = 30.0
 	g.SetGameSpeed(30) // ensure actual game tick rate matches the variable
@@ -145,8 +152,11 @@ func (b *GoBehavior) Step(inst *engine.Instance, g *engine.Game) {
 		b.afterwave = 1
 
 		// auto-save career progression after each wave (XP, points, high scores)
-		if err := savedata.Save(g); err != nil {
-			fmt.Printf("WARNING: could not auto-save: %v\n", err)
+		// skip save in sandbox mode to avoid polluting career data
+		if getGlobal(g, "sandbox") != 1 {
+			if err := savedata.Save(g); err != nil {
+				fmt.Printf("WARNING: could not auto-save: %v\n", err)
+			}
 		}
 	}
 
@@ -255,6 +265,14 @@ func (b *GoBehavior) startNextWave(inst *engine.Instance, g *engine.Game) {
 		fmt.Printf("WARNING: Timeline %s not found for wave %d\n", tlName, wave)
 		inst.SpriteName = "sprite278"
 		return
+	}
+
+	// despawn leftover road spikes and pineapples from previous round
+	for _, sp := range g.InstanceMgr.FindByObject("Spike_Pile") {
+		g.InstanceMgr.Destroy(sp.ID)
+	}
+	for _, sp := range g.InstanceMgr.FindByObject("Grilled_Pineapple") {
+		g.InstanceMgr.Destroy(sp.ID)
 	}
 
 	g.GlobalVars["wavenow"] = 1.0
@@ -367,7 +385,11 @@ type SettingsBehavior struct {
 }
 
 func (b *SettingsBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	g.GlobalVars["sandbox"] = 0.0
+	// sandbox is set by Sandbox_Settings in _Sand rooms; don't reset it here.
+	if _, ok := g.GlobalVars["sandbox"]; !ok {
+		g.GlobalVars["sandbox"] = 0.0
+	}
+
 	if g.InstanceMgr.InstanceCount("Wave_Panel") > 0 {
 		return
 	}
@@ -443,6 +465,11 @@ func activateDebugCheat(g *engine.Game) {
 	// money cap in Control.Step is 2,000,000,000.
 	g.GlobalVars["money"] = 2000000000.0
 
+	// boost rank and BP for shop testing
+	g.GlobalVars["rank"] = 99.0
+	g.GlobalVars["BP"] = 999.0
+	g.GlobalVars["monkeymoney"] = 9999.0
+
 	// unlock all tower/unit buy panels for this run.
 	for _, cfg := range panelConfigs {
 		if cfg.lockKey == "" {
@@ -462,7 +489,7 @@ func activateDebugCheat(g *engine.Game) {
 			g.GlobalVars[key] = 99.0
 		}
 	}
-	fmt.Println("DEBUG CHEAT ACTIVATED: max money + all units + all tier4/tier5 paths unlocked")
+	fmt.Println("DEBUG CHEAT ACTIVATED: max money + rank 99 + BP 999 + MM 9999 + all units + all tier4/tier5 paths unlocked")
 }
 
 func (b *ControlBehavior) handleDebugCheat(g *engine.Game) {

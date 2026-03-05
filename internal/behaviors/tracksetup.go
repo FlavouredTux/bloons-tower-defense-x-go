@@ -168,6 +168,7 @@ func (b *PlayBar) Create(inst *engine.Instance, g *engine.Game) {
 	// reset modifier flags
 	g.GlobalVars["sixtowers"] = 0.0
 	g.GlobalVars["randomtowers"] = 0.0
+
 	g.GlobalVars["wavesqueeze"] = 0.0
 	g.GlobalVars["waveskip"] = 0.0
 	g.GlobalVars["strongerbloons"] = 0.0
@@ -265,6 +266,11 @@ func (b *PlayBar) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	}
 	g.GlobalVars["pointmultiplier"] = pm
 
+	// sandbox: zero out points so sandbox games don't inflate career stats
+	if getGlobal(g, "sandbox") == 1 {
+		g.GlobalVars["pointmultiplier"] = 0.0
+	}
+
 	// unlock towers based on rank
 	b.unlockTowers(g)
 
@@ -281,6 +287,10 @@ func (b *PlayBar) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *PlayBar) unlockTowers(g *engine.Game) {
+	if getGlobal(g, "sandbox") == 1 {
+		unlockAllTowers(g) // sandbox: all towers available
+		return
+	}
 	unlockTowersForRank(g)
 }
 

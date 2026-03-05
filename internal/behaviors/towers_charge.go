@@ -247,10 +247,10 @@ func (b *ChargeTowerBehavior) Alarm(inst *engine.Instance, idx int, g *engine.Ga
 		}
 
 		b.fireProjectile(inst, g, form, target)
-			newCharge := charge - 1
-			inst.Vars["charge"] = newCharge
-			// Update sprite frame to show one fewer charge dot
-			inst.ImageIndex = chargeImageIndex(form, newCharge)
+		newCharge := charge - 1
+		inst.Vars["charge"] = newCharge
+		// Update sprite frame to show one fewer charge dot
+		inst.ImageIndex = chargeImageIndex(form, newCharge)
 
 	case 2:
 		// ability charge tick (Charge_Overload, Lightning_Bomb)
@@ -517,18 +517,7 @@ type ChargeProjBehavior struct {
 }
 
 func (b *ChargeProjBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 2.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 0.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 0.0
-	}
+	initProjDefaults(inst, 1, 2, 0, 0)
 	// short lifetime: expires after ~11 frames (enough at speed 20–26 to clear tower range)
 	inst.Alarms[0] = 14
 }
@@ -562,18 +551,7 @@ type OrbitalChargeBehavior struct {
 
 func (b *OrbitalChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
 	// Defaults — tower will override these before the first Step.
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 10.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 1.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 1.0
-	}
+	initProjDefaults(inst, 1, 10, 1, 1)
 	if _, ok := inst.Vars["pathCycle"]; !ok {
 		inst.Vars["pathCycle"] = 1.0
 	}
@@ -702,18 +680,7 @@ type BurstChargeBehavior struct {
 }
 
 func (b *BurstChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 4.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 1.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 0.0
-	}
+	initProjDefaults(inst, 1, 4, 1, 0)
 	inst.Alarms[0] = 14
 }
 
@@ -771,18 +738,7 @@ type MegaChargeBehavior struct {
 }
 
 func (b *MegaChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 20.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 1.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 0.0
-	}
+	initProjDefaults(inst, 1, 20, 1, 0)
 	inst.Alarms[0] = 14
 }
 
@@ -857,18 +813,7 @@ type MegaMegaChargeBehavior struct {
 }
 
 func (b *MegaMegaChargeBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 100.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 1.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 0.0
-	}
+	initProjDefaults(inst, 1, 100, 1, 0)
 	inst.Vars["phase"] = rand.Float64() * 90
 	inst.Alarms[0] = 14
 }
@@ -945,18 +890,7 @@ type EnergyProjBehavior struct {
 }
 
 func (b *EnergyProjBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 30.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 1.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 0.0
-	}
+	initProjDefaults(inst, 1, 30, 1, 0)
 	inst.Alarms[0] = 8 // short lifetime
 }
 
@@ -990,10 +924,7 @@ type EnergyBombBehavior struct {
 }
 
 func (b *EnergyBombBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	inst.Vars["LP"] = 30.0
-	inst.Vars["PP"] = 2500.0
-	inst.Vars["leadpop"] = 1.0
-	inst.Vars["camopop"] = 1.0
+	setProjDefaults(inst, 30, 2500, 1, 1)
 	inst.Vars["explode_radius"] = 150.0
 	inst.ImageXScale = 0.01
 	inst.ImageYScale = 0.01

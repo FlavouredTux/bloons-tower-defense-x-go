@@ -15,30 +15,30 @@ type Instance struct {
 	ObjectName string
 
 	// position and motion
-	X, Y               float64
+	X, Y                 float64
 	XPrevious, YPrevious float64
-	XStart, YStart     float64
-	HSpeed, VSpeed     float64
-	Speed, Direction   float64
-	Gravity            float64
-	GravityDirection   float64
-	Friction           float64
+	XStart, YStart       float64
+	HSpeed, VSpeed       float64
+	Speed, Direction     float64
+	Gravity              float64
+	GravityDirection     float64
+	Friction             float64
 
 	// rendering
-	Visible        bool
-	Depth          int
-	SpriteName     string
-	ImageIndex     float64
-	ImageSpeed     float64
-	ImageXScale    float64
-	ImageYScale    float64
-	ImageAngle     float64
-	ImageAlpha     float64
-	ImageBlend     uint32
+	Visible     bool
+	Depth       int
+	SpriteName  string
+	ImageIndex  float64
+	ImageSpeed  float64
+	ImageXScale float64
+	ImageYScale float64
+	ImageAngle  float64
+	ImageAlpha  float64
+	ImageBlend  uint32
 
 	// collision
-	Solid      bool
-	MaskName   string
+	Solid    bool
+	MaskName string
 
 	// state
 	Active     bool
@@ -53,10 +53,10 @@ type Instance struct {
 	GameRef *Game
 
 	// path following
-	PathIndex    int
-	PathPosition float64
-	PathSpeed    float64
-	PathScale    float64
+	PathIndex       int
+	PathPosition    float64
+	PathSpeed       float64
+	PathScale       float64
 	PathOrientation float64
 	PathEndAction   int // 0=stop, 1=restart, 2=reverse, 3=continue
 
@@ -88,18 +88,18 @@ type InstanceBehavior interface {
 // defaultBehavior provides no-op implementations for all events
 type DefaultBehavior struct{}
 
-func (d *DefaultBehavior) Create(inst *Instance, g *Game)                              {}
-func (d *DefaultBehavior) Destroy(inst *Instance, g *Game)                             {}
-func (d *DefaultBehavior) Step(inst *Instance, g *Game)                                {}
-func (d *DefaultBehavior) StepBegin(inst *Instance, g *Game)                           {}
-func (d *DefaultBehavior) StepEnd(inst *Instance, g *Game)                             {}
-func (d *DefaultBehavior) Alarm(inst *Instance, alarmIndex int, g *Game)               {}
-func (d *DefaultBehavior) Collision(inst *Instance, other *Instance, g *Game)          {}
-func (d *DefaultBehavior) MouseLeftPressed(inst *Instance, g *Game)                    {}
-func (d *DefaultBehavior) MouseRightPressed(inst *Instance, g *Game)                   {}
-func (d *DefaultBehavior) MouseGlobalLeftPressed(inst *Instance, g *Game)              {}
-func (d *DefaultBehavior) MouseGlobalLeftReleased(inst *Instance, g *Game)             {}
-func (d *DefaultBehavior) KeyPress(inst *Instance, g *Game)                            {}
+func (d *DefaultBehavior) Create(inst *Instance, g *Game)                     {}
+func (d *DefaultBehavior) Destroy(inst *Instance, g *Game)                    {}
+func (d *DefaultBehavior) Step(inst *Instance, g *Game)                       {}
+func (d *DefaultBehavior) StepBegin(inst *Instance, g *Game)                  {}
+func (d *DefaultBehavior) StepEnd(inst *Instance, g *Game)                    {}
+func (d *DefaultBehavior) Alarm(inst *Instance, alarmIndex int, g *Game)      {}
+func (d *DefaultBehavior) Collision(inst *Instance, other *Instance, g *Game) {}
+func (d *DefaultBehavior) MouseLeftPressed(inst *Instance, g *Game)           {}
+func (d *DefaultBehavior) MouseRightPressed(inst *Instance, g *Game)          {}
+func (d *DefaultBehavior) MouseGlobalLeftPressed(inst *Instance, g *Game)     {}
+func (d *DefaultBehavior) MouseGlobalLeftReleased(inst *Instance, g *Game)    {}
+func (d *DefaultBehavior) KeyPress(inst *Instance, g *Game)                   {}
 func (d *DefaultBehavior) Draw(inst *Instance, screen *ebiten.Image, g *Game) {
 	// default draw: render the sprite at the instance position
 	if inst.SpriteName == "" {
@@ -275,14 +275,21 @@ func (inst *Instance) MotionSet(dir, spd float64) {
 
 // instanceManager manages all active instances
 type InstanceManager struct {
-	mu         sync.RWMutex
-	instances  map[int]*Instance
-	nextID     int
-	toDestroy  []int
-	gameRef    *Game
+	mu        sync.RWMutex
+	instances map[int]*Instance
+	nextID    int
+	toDestroy []int
+	gameRef   *Game
+
+	// object-name index: O(1) lookup for FindByObject (biggest perf win)
+	byObject map[string][]*Instance
+
+	// cached GetAll result — rebuilt only when dirty
+	allCache []*Instance
+	allDirty bool
 
 	// object type registry - maps object name to behavior factory
-	behaviors  map[string]func() InstanceBehavior
+	behaviors map[string]func() InstanceBehavior
 
 	// object sprite mapping (from objects.json)
 	objectSprites map[string]string
@@ -295,6 +302,8 @@ func NewInstanceManager() *InstanceManager {
 	return &InstanceManager{
 		instances:     make(map[int]*Instance),
 		nextID:        100000,
+		byObject:      make(map[string][]*Instance),
+		allDirty:      true,
 		behaviors:     make(map[string]func() InstanceBehavior),
 		objectSprites: make(map[string]string),
 		objectDepths:  make(map[string]int),
@@ -340,6 +349,8 @@ func (im *InstanceManager) Create(objectName string, x, y float64) *Instance {
 	}
 
 	im.instances[inst.ID] = inst
+	im.byObject[objectName] = append(im.byObject[objectName], inst)
+	im.allDirty = true
 	im.mu.Unlock()
 
 	// run Create after releasing the manager lock so behaviors can safely
@@ -363,46 +374,86 @@ func (im *InstanceManager) CreateFromRoom(ri RoomInstanceDef) *Instance {
 	return inst
 }
 
-// destroy marks an instance for destruction
+// destroy marks an instance for destruction.
+// OnDestroy is called outside the lock to prevent deadlocks.
 func (im *InstanceManager) Destroy(id int) {
 	im.mu.Lock()
-	defer im.mu.Unlock()
-
-	if inst, ok := im.instances[id]; ok {
+	inst, ok := im.instances[id]
+	if ok {
 		inst.Destroyed = true
-		inst.OnDestroy()
 		im.toDestroy = append(im.toDestroy, id)
+	}
+	im.mu.Unlock()
+
+	if ok {
+		inst.OnDestroy()
 	}
 }
 
-// flushDestroyed removes all destroyed instances
+// flushDestroyed removes all destroyed instances and cleans up the object-name index.
 func (im *InstanceManager) FlushDestroyed() {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 
+	if len(im.toDestroy) == 0 {
+		return
+	}
+
+	// remove from byObject index
 	for _, id := range im.toDestroy {
-		delete(im.instances, id)
+		if inst, ok := im.instances[id]; ok {
+			objName := inst.ObjectName
+			list := im.byObject[objName]
+			for i, v := range list {
+				if v.ID == id {
+					im.byObject[objName] = append(list[:i], list[i+1:]...)
+					break
+				}
+			}
+			delete(im.instances, id)
+		}
 	}
 	im.toDestroy = im.toDestroy[:0]
+	im.allDirty = true
 }
 
-// getAll returns all active instances
+// getAll returns all active instances (cached, rebuilt only when dirty).
 func (im *InstanceManager) GetAll() []*Instance {
 	im.mu.RLock()
-	defer im.mu.RUnlock()
-
-	result := make([]*Instance, 0, len(im.instances))
-	for _, inst := range im.instances {
-		result = append(result, inst)
+	if !im.allDirty {
+		result := im.allCache
+		im.mu.RUnlock()
+		return result
 	}
+	im.mu.RUnlock()
+
+	// rebuild under write lock
+	im.mu.Lock()
+	// double-check after acquiring write lock
+	if !im.allDirty {
+		result := im.allCache
+		im.mu.Unlock()
+		return result
+	}
+	im.allCache = make([]*Instance, 0, len(im.instances))
+	for _, inst := range im.instances {
+		im.allCache = append(im.allCache, inst)
+	}
+	im.allDirty = false
+	result := im.allCache
+	im.mu.Unlock()
 	return result
 }
 
 // getSortedByDepth returns instances sorted by depth (descending - higher depth drawn first)
+// Uses stable sort with ID tiebreaker to prevent z-fighting between same-depth instances.
 func (im *InstanceManager) GetSortedByDepth() []*Instance {
 	all := im.GetAll()
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].Depth > all[j].Depth
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Depth != all[j].Depth {
+			return all[i].Depth > all[j].Depth
+		}
+		return all[i].ID < all[j].ID // consistent order within same depth
 	})
 	return all
 }
@@ -414,28 +465,26 @@ func (im *InstanceManager) GetByID(id int) *Instance {
 	return im.instances[id]
 }
 
-// findByObject returns all instances of a given object type
+// findByObject returns all instances of a given object type.
+// Uses the object-name index for O(1) lookup instead of scanning all instances.
 func (im *InstanceManager) FindByObject(objectName string) []*Instance {
 	im.mu.RLock()
 	defer im.mu.RUnlock()
-
-	var result []*Instance
-	for _, inst := range im.instances {
-		if inst.ObjectName == objectName && !inst.Destroyed {
-			result = append(result, inst)
-		}
-	}
-	return result
+	return im.byObject[objectName]
 }
 
 // instanceCount returns the number of instances of an object type
 func (im *InstanceManager) InstanceCount(objectName string) int {
-	return len(im.FindByObject(objectName))
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+	return len(im.byObject[objectName])
 }
 
 // instanceExists checks if any instance of the given object type exists
 func (im *InstanceManager) InstanceExists(objectName string) bool {
-	return im.InstanceCount(objectName) > 0
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+	return len(im.byObject[objectName]) > 0
 }
 
 // objectSpriteName returns the default sprite mapped for an object name.
@@ -445,37 +494,29 @@ func (im *InstanceManager) ObjectSpriteName(objectName string) string {
 	return im.objectSprites[objectName]
 }
 
-// destroyNonPersistent destroys all non-persistent instances (for room transitions)
+// destroyNonPersistent destroys all non-persistent instances (for room transitions).
+// Calls OnDestroy outside the lock to prevent deadlocks.
 func (im *InstanceManager) DestroyNonPersistent() {
 	im.mu.Lock()
-	defer im.mu.Unlock()
-
+	var toNotify []*Instance
 	for id, inst := range im.instances {
 		if !inst.Persistent {
 			inst.Destroyed = true
-			inst.OnDestroy()
 			im.toDestroy = append(im.toDestroy, id)
+			toNotify = append(toNotify, inst)
 		}
+	}
+	im.mu.Unlock()
+
+	for _, inst := range toNotify {
+		inst.OnDestroy()
 	}
 }
 
-// checkCollisions checks collisions between instances using bounding boxes
-func (im *InstanceManager) CheckCollisions() {
-	all := im.GetAll()
-	// simple O(n²) for now - can optimize with spatial partitioning later
-	for i := 0; i < len(all); i++ {
-		if !all[i].Active || all[i].Destroyed {
-			continue
-		}
-		for j := i + 1; j < len(all); j++ {
-			if !all[j].Active || all[j].Destroyed {
-				continue
-			}
-			// tODO: implement proper bbox collision using sprite data
-			// for now this is a placeholder
-		}
-	}
-}
+// checkCollisions is a no-op placeholder. All collision detection is handled
+// by individual projectile behaviors via projectileHitBloons().
+// Kept for API compatibility but does nothing.
+func (im *InstanceManager) CheckCollisions() {}
 
 // roomInstanceDef defines an instance placement in a room
 type RoomInstanceDef struct {

@@ -15,7 +15,7 @@ import (
 // tower costs for placement (towerselect → cost)
 var towerCosts = map[float64]float64{
 	1: 200, 2: 370, 3: 380, 4: 420, 5: 590, 6: 650,
-	7: 550,
+	7: 550, 11: 700,
 	8: 450, 9: 450, 10: 510, 12: 470, 13: 810, 14: 600,
 	15: 720, 16: 450, 17: 900, 18: 1200, 19: 780, 20: 950,
 	21: 750, 22: 1250, 23: 1110, 24: 3000,
@@ -25,7 +25,7 @@ var towerCosts = map[float64]float64{
 var towerObjects = map[float64]string{
 	1: "Dart_Monkey", 2: "Tack_Shooter", 3: "Boomerang_Thrower",
 	4: "Sniper_Monkey", 5: "Ninja_Monkey", 6: "Bomb_Cannon",
-	7: "Monkey_Sub",
+	7: "Monkey_Sub", 11: "Monkey_Buccaneer",
 	8: "Charge_Tower", 9: "Glue_Gunner_L1", 10: "Ice_Monkey",
 	12: "Monkey_Engineer", 13: "Hanger_0X", 14: "Bloonchipper",
 	15: "Monkey_Alchemist", 16: "Monkey_Apprentice", 17: "Banana_Tree",
@@ -214,15 +214,54 @@ func drawHoveredTowerBuyTooltip(screen *ebiten.Image, g *engine.Game) {
 		}
 	}
 
+	// also check consumable buy panels (Spike_Pile_buy, Pineapples)
+	consumablePanels := map[string]struct {
+		name  string
+		price int
+	}{
+		"Spike_Pile_buy": {"Road Spikes", 30},
+		"Pineapples":     {"Pineapple", 30},
+	}
+	for objName, info := range consumablePanels {
+		for _, inst := range g.InstanceMgr.FindByObject(objName) {
+			if !inst.Visible {
+				continue
+			}
+			if !isMouseOverPanelDraw(inst, g) {
+				continue
+			}
+			d := math.Abs(inst.X-mx) + math.Abs(inst.Y-my)
+			if d < bestDist {
+				bestDist = d
+				bestName = info.name
+				bestPrice = info.price
+			}
+		}
+	}
+
 	if bestName == "" {
 		return
 	}
 
-	if tip := g.AssetManager.GetSprite("Tower_Info_Panel_Spr"); tip != nil && len(tip.Frames) > 0 {
-		engine.DrawSpriteExt(screen, tip.Frames[0], tip.XOrigin, tip.YOrigin, mx, my, 1, 1, 0, 1)
+	// measure the name text width and scale the panel if it's too long
+	const panelUsableWidth = 118.0 // ~128px sprite minus margins
+	nameWidth := 0.0
+	if g.BMFont != nil && len(g.BMFont.Glyphs) > 0 {
+		nameWidth = g.BMFont.TextWidthScaled(bestName, hudSmallTextScale)
+	} else {
+		nameWidth = float64(len(bestName)) * 7 * hudSmallTextScale // fallback estimate
 	}
-	drawHUDTextSmall(screen, g, bestName, mx-119, my-11, hudColorBlack)
-	drawHUDTextSmall(screen, g, fmt.Sprintf("$%d", bestPrice), mx-60, my+16, hudColorBlack)
+	panelScaleX := 1.0
+	if nameWidth > panelUsableWidth {
+		panelScaleX = (nameWidth + 12) / panelUsableWidth // +12 for padding
+	}
+
+	if tip := g.AssetManager.GetSprite("Tower_Info_Panel_Spr"); tip != nil && len(tip.Frames) > 0 {
+		engine.DrawSpriteExt(screen, tip.Frames[0], tip.XOrigin, tip.YOrigin, mx, my, panelScaleX, 1, 0, 1)
+	}
+	textOffsetX := -119.0 * panelScaleX
+	drawHUDTextSmall(screen, g, bestName, mx+textOffsetX, my-11, hudColorBlack)
+	drawHUDTextSmall(screen, g, fmt.Sprintf("$%d", bestPrice), mx-60*panelScaleX, my+16, hudColorBlack)
 }
 
 // block — tower placement spot. Click to place selected tower.
@@ -235,8 +274,9 @@ func (b *BlockBehavior) Create(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *BlockBehavior) Step(inst *engine.Instance, g *engine.Game) {
-	// show/hide based on towerplace mode; hide for water-only towers
-	if getGlobal(g, "towerplace") == 1 && !isWaterTowerSelected(g) {
+	// show/hide based on towerplace mode; hide for water-only towers and consumables.
+	// occupied blocks (tower sitting on them) stay hidden even in placement mode.
+	if getGlobal(g, "towerplace") == 1 && !isWaterTowerSelected(g) && !isConsumableSelected(g) && getVar(inst, "occupied") == 0 {
 		if inst.SpriteName == "" {
 			inst.SpriteName = "Block_Spr"
 		}
@@ -252,6 +292,10 @@ func (b *BlockBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) 
 	}
 	// water-only towers cannot be placed on land blocks
 	if isWaterTowerSelected(g) {
+		return
+	}
+	// already occupied (a tower is on this block)
+	if getVar(inst, "occupied") == 1 {
 		return
 	}
 
@@ -304,8 +348,10 @@ func (b *BlockBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) 
 		block.SpriteName = ""
 	}
 
-	// destroy this block (tower occupies the spot)
-	g.InstanceMgr.Destroy(inst.ID)
+	// mark this block as occupied — do NOT destroy it so it can reappear after a sell.
+	inst.Vars["occupied"] = 1.0
+	inst.Visible = false
+	inst.SpriteName = ""
 }
 
 // countTowers counts placed tower instances
@@ -319,6 +365,10 @@ func countTowers(g *engine.Game) int {
 		"Monkey_Alchemist", "Monkey_Apprentice", "Banana_Tree", "Monkey_Village",
 		"Mortar_Launcher", "Dartling_Gunner", "Spike_Factory", "AHanger_0X",
 		"Plasma_Monkey_", "Super_Monkey",
+		// banana farm upgrade chain
+		"Banana_Farm", "Banana_Plantation", "Banana_Republic",
+		"Healthy_Bananas", "Passive_Income", "Rubberlust_Farm",
+		"Banana_Factory", "Banana_Replicator",
 	}
 	for _, name := range towerObjectNames {
 		count += g.InstanceMgr.InstanceCount(name)
@@ -416,10 +466,7 @@ type DartBehavior struct {
 
 func (b *DartBehavior) Create(inst *engine.Instance, g *engine.Game) {
 	inst.ImageAngle = inst.Direction
-	inst.Vars["LP"] = 1.0
-	inst.Vars["PP"] = 1.0
-	inst.Vars["leadpop"] = 0.0
-	inst.Vars["camopop"] = 0.0
+	setProjDefaults(inst, 1, 1, 0, 0)
 	inst.Vars["range"] = 11.0
 }
 
@@ -676,7 +723,7 @@ func (b *WaterBehavior) Create(inst *engine.Instance, g *engine.Game) {
 }
 
 func (b *WaterBehavior) Step(inst *engine.Instance, g *engine.Game) {
-	if getGlobal(g, "towerplace") == 1 && isWaterTowerSelected(g) {
+	if getGlobal(g, "towerplace") == 1 && isWaterTowerSelected(g) && getVar(inst, "occupied") == 0 {
 		inst.SpriteName = "Water_Block_spr"
 	} else {
 		inst.SpriteName = "Water_Spr"
@@ -686,6 +733,9 @@ func (b *WaterBehavior) Step(inst *engine.Instance, g *engine.Game) {
 func (b *WaterBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	if getGlobal(g, "towerplace") != 1 || !isWaterTowerSelected(g) {
 		return
+	}
+	if getVar(inst, "occupied") == 1 {
+		return // already has a tower
 	}
 
 	towerSel := getGlobal(g, "towerselect")
@@ -757,4 +807,10 @@ func RegisterTowerBehaviors(im *engine.InstanceManager) {
 
 	// dart projectile
 	im.RegisterBehavior("Dart", func() engine.InstanceBehavior { return &DartBehavior{} })
+
+	// banana Tree base tower
+	im.RegisterBehavior("Banana_Tree", func() engine.InstanceBehavior { return &BananaTreeBehavior{} })
+
+	// banana pickup object (click to collect $20)
+	im.RegisterBehavior("Banana", func() engine.InstanceBehavior { return &BananaBehavior{} })
 }

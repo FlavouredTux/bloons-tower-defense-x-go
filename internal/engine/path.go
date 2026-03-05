@@ -143,68 +143,6 @@ func (pm *PathManager) GetDirectionAtProgress(name string, progress float64) flo
 	return math.Atan2(-dy, dx) * 180 / math.Pi
 }
 
-// computeSmoothPath generates interpolated points for smooth paths using Catmull-Rom
-func computeSmoothPath(points []PathPointDef, precision int, closed bool) []PathPointDef {
-	if precision < 1 {
-		precision = 4
-	}
-	if len(points) < 2 {
-		return points
-	}
-
-	stepsPerSegment := precision * 4 // more steps = smoother
-	var result []PathPointDef
-
-	n := len(points)
-	for i := 0; i < n-1; i++ {
-		// get 4 control points for Catmull-Rom
-		var p0, p1, p2, p3 PathPointDef
-		p1 = points[i]
-		p2 = points[i+1]
-
-		if i > 0 {
-			p0 = points[i-1]
-		} else if closed {
-			p0 = points[n-1]
-		} else {
-			// reflect p1 across itself
-			p0 = PathPointDef{X: 2*p1.X - p2.X, Y: 2*p1.Y - p2.Y, Speed: p1.Speed}
-		}
-
-		if i < n-2 {
-			p3 = points[i+2]
-		} else if closed {
-			p3 = points[0]
-		} else {
-			p3 = PathPointDef{X: 2*p2.X - p1.X, Y: 2*p2.Y - p1.Y, Speed: p2.Speed}
-		}
-
-		for step := 0; step < stepsPerSegment; step++ {
-			t := float64(step) / float64(stepsPerSegment)
-			x := catmullRom(p0.X, p1.X, p2.X, p3.X, t)
-			y := catmullRom(p0.Y, p1.Y, p2.Y, p3.Y, t)
-			spd := p1.Speed + t*(p2.Speed-p1.Speed) // linear interpolate speed
-			result = append(result, PathPointDef{X: x, Y: y, Speed: spd})
-		}
-	}
-
-	// add the last point
-	result = append(result, points[n-1])
-
-	return result
-}
-
-// catmullRom evaluates a Catmull-Rom spline at parameter t
-func catmullRom(p0, p1, p2, p3, t float64) float64 {
-	t2 := t * t
-	t3 := t2 * t
-	return 0.5 * (
-		(2 * p1) +
-		(-p0+p2)*t +
-		(2*p0-5*p1+4*p2-p3)*t2 +
-		(-p0+3*p1-3*p2+p3)*t3)
-}
-
 func computePathLength(points []PathPointDef) float64 {
 	length := 0.0
 	for i := 1; i < len(points); i++ {
@@ -221,11 +159,11 @@ func dist(x1, y1, x2, y2 float64) float64 {
 
 // pathJSON for deserialization
 type PathJSON struct {
-	Name      string         `json:"Name"`
-	Kind      int            `json:"Kind"`
-	Closed    bool           `json:"Closed"`
-	Precision int            `json:"Precision"`
-	Points    []PathPtJSON   `json:"Points"`
+	Name      string       `json:"Name"`
+	Kind      int          `json:"Kind"`
+	Closed    bool         `json:"Closed"`
+	Precision int          `json:"Precision"`
+	Points    []PathPtJSON `json:"Points"`
 }
 
 type PathPtJSON struct {

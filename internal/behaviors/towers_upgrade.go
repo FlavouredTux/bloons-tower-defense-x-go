@@ -107,9 +107,19 @@ var allSelectableTowers = []string{
 	"Monkey_Apprentice", "Banana_Tree", "Monkey_Village",
 	"Mortar_Launcher", "Dartling_Gunner", "Spike_Factory",
 	"AHanger_0X", "Plasma_Monkey_", "Super_Monkey",
+	// banana farm upgrade chain
+	"Banana_Farm", "Banana_Plantation", "Banana_Republic",
+	"Healthy_Bananas", "Passive_Income", "Rubberlust_Farm",
+	"Banana_Factory", "Banana_Replicator",
 	"Monkey_Sub", "Barbed_Darts_Sub", "Twin_Guns",
 	"Torpedo_Sub", "Airburst_Sub", "Support_Sub", "Smart_Sub",
 	"Bloontonium_Reactor", "Anti_Matter_Reactor",
+	// monkey Buccaneer upgrade chain
+	"Monkey_Buccaneer", "Grape_Shot", "Crows_Nest",
+	"Swashbucklers", "Monkey_Pirates", "Pirate_Captain_Ship",
+	"Destroyer", "Supreme_Battleship", "Aircraft_Carrier",
+	"Cannon_Ship", "Harpoon_Ship", "MOAB_Takedown",
+	"Dreadnaut_Ship", "Cursed_Pirate_Ship", "Ghost_Ship",
 }
 
 // towerCodeFraction converts frac(global.tower) to an integer ×1000 for clean comparison
@@ -317,6 +327,23 @@ func (b *SellBehavior) MouseLeftPressed(inst *engine.Instance, g *engine.Game) {
 	}
 	g.GlobalVars["money"] = getGlobal(g, "money") + refund
 
+	// Restore the Block (land) or Water tile at this tower's position so it can
+	// be reused for placement after the sell.
+	// Towers are placed at (tile.X+16, tile.Y+16), so tile is at (tower.X-16, tower.Y-16).
+	tileX, tileY := sel.X-16, sel.Y-16
+	for _, block := range g.InstanceMgr.FindByObject("Block") {
+		if math.Abs(block.X-tileX) < 2 && math.Abs(block.Y-tileY) < 2 {
+			block.Vars["occupied"] = 0.0
+			break
+		}
+	}
+	for _, water := range g.InstanceMgr.FindByObject("Water") {
+		if math.Abs(water.X-tileX) < 2 && math.Abs(water.Y-tileY) < 2 {
+			water.Vars["occupied"] = 0.0
+			break
+		}
+	}
+
 	g.InstanceMgr.Destroy(sel.ID)
 	deselectAllTowers(g)
 	g.GlobalVars["pathup"] = 0.0
@@ -370,6 +397,13 @@ func cancelTowerUI(g *engine.Game) {
 	for _, block := range g.InstanceMgr.FindByObject("Block") {
 		block.Visible = false
 		block.SpriteName = "sprite277"
+	}
+	// destroy consumable placement ghosts
+	for _, p := range g.InstanceMgr.FindByObject("Pile_Place") {
+		g.InstanceMgr.Destroy(p.ID)
+	}
+	for _, p := range g.InstanceMgr.FindByObject("Pineapple_Place") {
+		g.InstanceMgr.Destroy(p.ID)
 	}
 }
 
@@ -541,9 +575,17 @@ func (b *UpgradePanel0Behavior) MouseLeftPressed(inst *engine.Instance, g *engin
 	if tower <= 0 {
 		return
 	}
+	if inst.ImageAlpha <= 0 {
+		return
+	}
 	val := towerCodeFraction(tower)
 	if val >= 200 {
-		// acting as PanelMiddle — path 2
+		// Acting as middle path panel — only respond to clicks in the middle zone
+		// (240 ≤ X < 508) to avoid interfering with the left/right panels which
+		// share the same wide sprite bbox.
+		if mx, _ := g.GetMouseRoomPos(); mx < 240 || mx >= 508 {
+			return
+		}
 		// don't allow clicks on locked panels
 		if isPathLocked(g, towerID(tower), 2, val) {
 			return
@@ -651,6 +693,10 @@ func (b *UpgradePanelLeftBehavior) MouseLeftPressed(inst *engine.Instance, g *en
 	if inst.ImageAlpha <= 0 {
 		return // hidden panel, can't click
 	}
+	// Only respond to clicks in the left zone (X < 240).
+	if mx, _ := g.GetMouseRoomPos(); mx >= 240 {
+		return
+	}
 	// don't allow clicks on locked panels
 	val := towerCodeFraction(tower)
 	if isPathLocked(g, towerID(tower), 1, val) {
@@ -749,6 +795,10 @@ func (b *UpgradePanelRightBehavior) MouseLeftPressed(inst *engine.Instance, g *e
 		return
 	}
 	if inst.ImageAlpha <= 0 {
+		return
+	}
+	// Only respond to clicks in the right zone (X >= 508).
+	if mx, _ := g.GetMouseRoomPos(); mx < 508 {
 		return
 	}
 	// don't allow clicks on locked panels
@@ -1084,18 +1134,7 @@ type LinearProjectileBehavior struct {
 }
 
 func (b *LinearProjectileBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	if _, ok := inst.Vars["LP"]; !ok {
-		inst.Vars["LP"] = 1.0
-	}
-	if _, ok := inst.Vars["PP"]; !ok {
-		inst.Vars["PP"] = 1.0
-	}
-	if _, ok := inst.Vars["leadpop"]; !ok {
-		inst.Vars["leadpop"] = 0.0
-	}
-	if _, ok := inst.Vars["camopop"]; !ok {
-		inst.Vars["camopop"] = 1.0
-	}
+	initProjDefaults(inst, 1, 1, 0, 1)
 	if _, ok := inst.Vars["range"]; !ok {
 		inst.Vars["range"] = 20.0
 	}
@@ -1125,10 +1164,7 @@ type PultBallBehavior struct {
 }
 
 func (b *PultBallBehavior) Create(inst *engine.Instance, g *engine.Game) {
-	inst.Vars["LP"] = 1.0
-	inst.Vars["PP"] = 21.0
-	inst.Vars["leadpop"] = 0.0
-	inst.Vars["camopop"] = 1.0
+	setProjDefaults(inst, 1, 21, 0, 1)
 }
 
 func (b *PultBallBehavior) Step(inst *engine.Instance, g *engine.Game) {

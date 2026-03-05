@@ -266,15 +266,7 @@ type SaveControl struct {
 	engine.DefaultBehavior
 }
 
-// bP_Display — draws currency/rank HUD (simplified for now)
-type BPDisplay struct {
-	engine.DefaultBehavior
-}
-
-func (b *BPDisplay) Draw(inst *engine.Instance, screen *ebiten.Image, g *engine.Game) {
-	// tODO: draw BP, monkey money, bsouls, trophies, rank
-	// requires font rendering implementation
-}
+// bP_Display — now implemented in tower_upgrade_shop.go as BPDisplayBehavior
 
 // level_uper — handles XP/rank progression
 type LevelUper struct {
@@ -394,11 +386,6 @@ func (b *AchieveControl) Create(inst *engine.Instance, g *engine.Game) {
 	inst.Depth = -10
 }
 
-func getGlobal(g *engine.Game, key string) float64 {
-	v, _ := g.GlobalVars[key].(float64)
-	return v
-}
-
 func (b *AchieveControl) Step(inst *engine.Instance, g *engine.Game) {
 	// calculate bsouls
 	bsouls := 0.0
@@ -502,7 +489,6 @@ func RegisterMainMenuBehaviors(im *engine.InstanceManager) {
 	im.RegisterBehavior("Main_Menu_Settings", func() engine.InstanceBehavior { return &MainMenuSettings{} })
 	im.RegisterBehavior("Variable_set_upper", func() engine.InstanceBehavior { return &VariableSetUpper{} })
 	im.RegisterBehavior("Save_Control", func() engine.InstanceBehavior { return &SaveControl{} })
-	im.RegisterBehavior("BP_Display", func() engine.InstanceBehavior { return &BPDisplay{} })
 	im.RegisterBehavior("Level_uper", func() engine.InstanceBehavior { return &LevelUper{} })
 	im.RegisterBehavior("Sound_Control", func() engine.InstanceBehavior { return &SoundControl{} })
 	im.RegisterBehavior("MM_Version", func() engine.InstanceBehavior { return &MMVersion{} })

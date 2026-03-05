@@ -938,11 +938,14 @@ func legacyLinearUpgradeRuleFor(objectName string) (linearUpgradeRule, bool) {
 }
 
 func legacyTowerCodeForObject(objectName string) (float64, bool) {
-	edges, ok := legacyUpgradeGraph[objectName]
-	if !ok || len(edges) == 0 {
-		return 0, false
+	// Use effectiveTowerCode so that branching objects (multiple edges with
+	// a .22x code) return the branch-point code (.20) instead of the first
+	// edge's raw code.  This ensures applyLinearUpgrade sets global.tower to
+	// a val>=200 that makes all three path panels visible.
+	if code, ok := effectiveTowerCode(objectName); ok {
+		return code, true
 	}
-	return edges[0].TowerCode, true
+	return 0, false
 }
 
 func legacyUpgradeEdgesFor(objectName string) []legacyUpgradeEdge {

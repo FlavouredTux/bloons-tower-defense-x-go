@@ -153,6 +153,31 @@ func Load(g *engine.Game) error {
 	for k, v := range data {
 		g.GlobalVars[k] = v
 	}
+
+	// Migration: tower path vars must be >= 1.0 (the GML default).
+	// Older saves may have 0.0 from a broken default, or 99.0 from a debug cheat.
+	// Clamp back to valid range: 0 → 1 (base), values ≤ 3 or 11-13 are valid.
+	pathKeys := []string{
+		"DML", "DMM", "DMR", "TSL", "TSM", "TSR", "BML", "BMM", "BMR",
+		"SnML", "SnMM", "SnMR", "NML", "NMM", "NMR", "BCL", "BCM", "BCR",
+		"MSL", "MSM", "MSR", "CTL", "CTM", "CTR",
+		"GGL", "GGM", "GGR", "IML", "IMM", "IMR", "MBL", "MBM", "MBR",
+		"MEL", "MEM", "MER", "MAL", "MAM", "MAR", "BChL", "BChM", "BChR",
+		"MApL", "MApM", "MApR", "MAlL", "MAlM", "MAlR",
+		"MVL", "MVM", "MVR", "BTL", "BTM", "BTR", "DGL", "DGM", "DGR",
+		"MLL", "MLM", "MLR", "HPL", "HPM", "HPR", "SFL", "SFM", "SFR",
+		"PML", "PMM", "PMR", "SuML", "SuMM", "SuMR",
+	}
+	for _, k := range pathKeys {
+		if v, ok := g.GlobalVars[k].(float64); ok {
+			if v < 1.0 {
+				g.GlobalVars[k] = 1.0  // fix broken 0.0 defaults
+			} else if v > 13.0 {
+				g.GlobalVars[k] = 1.0  // fix debug cheat 99.0 values
+			}
+		}
+	}
+
 	fmt.Printf("[savedata] loaded %d career keys from %s\n", len(data), path)
 	return nil
 }
